@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 0.1.0
+        required: true
+        type: string
+      libtorrent_ref:
+        description: Pinned libtorrent ref or latest
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate source package
+        run: |
+          ./scripts/validate-swift-package.sh source
+
+      - name: Prepare scripts
+        run: chmod +x scripts/*.sh
+
+      - name: Resolve release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "RELEASE_VERSION=${VERSION#v}" >> "${GITHUB_ENV}"
+
+      - name: Ensure CMake
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+
+      - name: Run release pipeline
+        run: |
+          if [[ -n "${{ inputs.libtorrent_ref }}" ]]; then
+            export LIBTORRENT_REF="${{ inputs.libtorrent_ref }}"
+          fi
+          ./scripts/release.sh "${RELEASE_VERSION}"
