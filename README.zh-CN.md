@@ -1,44 +1,44 @@
 # libtorrent-apple
 
-[中文说明](README.zh-CN.md)
+[English](README.md)
 
-`libtorrent-apple` is a SwiftPM-friendly Apple SDK built on top of `libtorrent`.
-It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and keeps the C or C++ boundary hidden behind the package.
+`libtorrent-apple` 是一个基于 `libtorrent` 的 Apple 平台 Swift SDK。
+它提供真实可分发的 `XCFramework`、Swift 优先的 API，以及完整的 GitHub Release + SwiftPM 二进制分发链路。
 
-## What This Repo Gives You
+## 这个仓库能给你什么
 
-- A public SwiftPM product: `LibtorrentApple`
-- An internal binary target: `LibtorrentAppleBinary`
-- Apple builds for `iOS device`, `iOS simulator`, and `macOS`
-- A release pipeline that produces a GitHub Release-hosted `XCFramework` zip for SwiftPM
-- A Swift API that already covers the core BitTorrent engine workflows used by projects like `iTorrent` and `anitorrent`
+- 一个对外的 SwiftPM 产品：`LibtorrentApple`
+- 一个内部二进制 target：`LibtorrentAppleBinary`
+- `iOS 真机`、`iOS 模拟器`、`macOS` 三套产物
+- 一套可以产出 GitHub Release 二进制包的自动化脚本
+- 一套已经覆盖 `iTorrent`、`anitorrent` 这类项目 BT 核心能力的 Swift API
 
-## Quick Start
+## 快速接入
 
-Add the package:
+添加包依赖：
 
 ```swift
 .package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.2")
 ```
 
-Then import:
+导入模块：
 
 ```swift
 import LibtorrentApple
 ```
 
-## Main Types
+## 主要类型
 
-- `TorrentDownloader`: higher-level entry point with managed directories, metadata fetch, and resume snapshots
-- `TorrentSession`: lower-level session actor for direct torrent lifecycle control
-- `TorrentHandle`: torrent-scoped control surface
-- `TorrentFileHandle`: file-scoped control surface
-- `TorrentDownloadController`: streaming-oriented piece and file prioritization API
-- `SessionConfiguration`: session settings for ports, limits, proxy, encryption, and network behavior
+- `TorrentDownloader`：更高层的入口，负责目录管理、元数据获取、resume 快照
+- `TorrentSession`：更底层的 session actor，直接控制 torrent 生命周期
+- `TorrentHandle`：单个 torrent 的控制对象
+- `TorrentFileHandle`：单个文件的控制对象
+- `TorrentDownloadController`：面向边下边播的流式下载控制接口
+- `SessionConfiguration`：session 配置，包含端口、限速、代理、加密、网络行为等
 
-## Basic Usage
+## 主要 API 用法
 
-### 1. Start a downloader and add a magnet link
+### 1. 启动 downloader 并添加 magnet
 
 ```swift
 import Foundation
@@ -64,7 +64,7 @@ print(status.name)
 print(status.metrics.progress)
 ```
 
-### 2. Add a local `.torrent` file
+### 2. 添加本地 `.torrent` 文件
 
 ```swift
 let torrentURL = URL(fileURLWithPath: "/path/to/file.torrent")
@@ -77,7 +77,7 @@ let files = try await handle.files()
 print(files.map(\.path))
 ```
 
-### 3. Observe alerts and aggregate stats
+### 3. 监听 alerts 和总统计
 
 ```swift
 Task {
@@ -90,13 +90,13 @@ Task {
 Task {
     let statsStream = await downloader.statsUpdates(pollInterval: .seconds(1))
     for await stats in statsStream {
-        print("running torrents:", stats.runningTorrentCount)
-        print("download rate:", stats.aggregateDownloadRateBytesPerSecond)
+        print("运行中的 torrent 数:", stats.runningTorrentCount)
+        print("下载速度:", stats.aggregateDownloadRateBytesPerSecond)
     }
 }
 ```
 
-### 4. Streaming-oriented control
+### 4. 做边下边播相关控制
 
 ```swift
 let controller = try await handle.downloadController()
@@ -113,12 +113,12 @@ print(snapshot.progress)
 Task {
     let pieceUpdates = controller.updates(pollInterval: .seconds(1))
     for try await nextSnapshot in pieceUpdates {
-        print("completed pieces:", nextSnapshot.completedPieceCount)
+        print("已完成 piece 数:", nextSnapshot.completedPieceCount)
     }
 }
 ```
 
-### 5. File priorities, trackers, and torrent control
+### 5. 文件优先级、tracker 和 torrent 控制
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -137,9 +137,9 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 6. Save and restore
+### 6. 保存和恢复
 
-Repository-level JSON snapshot:
+仓库级 JSON 快照恢复：
 
 ```swift
 let snapshotURL = try await downloader.persistResumeSnapshot(named: "default")
@@ -148,7 +148,7 @@ print(snapshotURL.path)
 try await downloader.restoreLatestResumeSnapshot()
 ```
 
-Native per-torrent resume data:
+单个 torrent 的 native resume data：
 
 ```swift
 let nativeResumeData = try await handle.exportResumeData()
@@ -161,31 +161,31 @@ let restoredHandle = try await downloader.addTorrent(
 print(try await restoredHandle.status().name)
 ```
 
-## API Coverage
+## 这版 API 已经覆盖的能力
 
-This version already includes:
+当前版本已经包含：
 
-- magnet and `.torrent` intake
-- HTTP(S) `.torrent` metadata fetch
-- torrent add, pause, resume, remove, recheck, and reannounce
-- file listing, file priorities, include or exclude, and file-local data deletion
-- tracker query, replacement, and addition
-- peer and piece inspection
-- sequential download, piece priorities, and piece deadlines
-- native alert polling plus typed high-frequency alert mapping
-- native resume data export and import
-- downloader-level stats streams and piece update streams
-- proxy, encryption, queue, cache, and send-buffer session settings
+- magnet 和 `.torrent` 添加
+- HTTP(S) `.torrent` 元数据抓取
+- torrent 的添加、暂停、恢复、删除、recheck、reannounce
+- 文件列表、文件优先级、包含或排除、删除本地文件数据
+- tracker 查询、替换、追加
+- peer 和 piece 查询
+- 顺序下载、piece 优先级、piece deadline
+- native alert 轮询和高频 typed alert 映射
+- native resume data 导出和导入
+- downloader 级 stats stream 和 piece update stream
+- 代理、加密、队列、缓存、send buffer 等 session 配置
 
-## Build and Validate Locally
+## 本地构建与验证
 
-Validate source mode:
+验证 source mode：
 
 ```bash
 ./scripts/validate-swift-package.sh source
 ```
 
-Build the Apple frameworks:
+构建 Apple 平台产物：
 
 ```bash
 ./scripts/sync-libtorrent.sh
@@ -194,56 +194,55 @@ Build the Apple frameworks:
 ./scripts/make-xcframework.sh 0.1.2
 ```
 
-Validate local binary mode:
+验证 local-binary mode：
 
 ```bash
 ./scripts/validate-swift-package.sh local-binary
 ```
 
-## Build Against a Different libtorrent Version
+## 指定其他 libtorrent 版本构建
 
-By default the repo builds from the pinned version in `scripts/versions.env`.
-That keeps builds reproducible.
+默认会使用 `scripts/versions.env` 里固定的 upstream 版本，这样构建更可复现。
 
-Use the latest upstream release tag:
+如果你想直接追 upstream 最新 release tag：
 
 ```bash
 LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 ```
 
-Use a specific upstream tag for one build:
+如果你想临时指定某个版本：
 
 ```bash
 LIBTORRENT_REF=v2.0.11 ./scripts/release.sh 0.1.2
 ```
 
-## Release Model
+## Release 与 SwiftPM 的关系
 
-The public SwiftPM package depends on a GitHub Release-hosted binary artifact.
+SwiftPM 真正依赖的是 GitHub Release 上的二进制 zip。
 
-What SwiftPM actually needs:
+对 SwiftPM 来说，真正必须的是：
 
-- the committed `Package.swift`
-- the committed `PackageSupport/BinaryArtifact.env`
-- the GitHub Release asset `LibtorrentAppleBinary-<version>.zip`
+- 仓库里的 `Package.swift`
+- 仓库里的 `PackageSupport/BinaryArtifact.env`
+- GitHub Release 上的 `LibtorrentAppleBinary-<version>.zip`
 
-The zip already contains the full `LibtorrentAppleBinary.xcframework`.
-You do not upload standalone `.framework` directories for SwiftPM consumption.
+这个 zip 里已经包含完整的 `LibtorrentAppleBinary.xcframework`。  
+所以给 SwiftPM 发版时，不需要单独上传 `.framework` 目录。
 
-## Tooling Requirements
+## 环境要求
 
 - Xcode 16+ command line tools
 - `cmake`
 - `git`
 - `curl`
 
-If `cmake` is missing:
+如果缺少 `cmake`：
 
 ```bash
 brew install cmake
 ```
 
-## Repository Layout
+## 仓库结构
 
 ```text
 PackageSupport/
@@ -260,10 +259,10 @@ scripts/
 .github/workflows/
 ```
 
-## Notes
+## 说明
 
-- Apps should depend on `LibtorrentApple`, not `LibtorrentAppleBinary`
-- If you manually link the raw framework instead of the package, also link:
+- App 侧应该依赖 `LibtorrentApple`，不要直接依赖 `LibtorrentAppleBinary`
+- 如果你不用 SwiftPM，而是手动接原始 framework，还需要额外链接：
   - `CFNetwork`
   - `CoreFoundation`
   - `Security`
