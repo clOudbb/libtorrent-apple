@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.2")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.3")
 ```
 
 导入模块：
@@ -191,7 +191,7 @@ print(try await restoredHandle.status().name)
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.1.2
+./scripts/make-xcframework.sh 0.1.3
 ```
 
 验证 local-binary mode：
@@ -213,7 +213,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.11 ./scripts/release.sh 0.1.2
+LIBTORRENT_REF=v2.0.11 ./scripts/release.sh 0.1.3
 ```
 
 ## Release 与 SwiftPM 的关系
