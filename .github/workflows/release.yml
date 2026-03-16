@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Disabled for now to keep binary artifact publishing single-sourced from
+  # local packaging + manual upload. Re-enable if/when the release process is
+  # redesigned into a checksum-safe staged workflow.
+  # push:
+  #   tags:
+  #     - "v*"
   workflow_dispatch:
     inputs:
       version:

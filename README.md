@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.3")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.4")
 ```
 
 Then import:
@@ -191,7 +191,7 @@ Build the Apple frameworks:
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.1.3
+./scripts/make-xcframework.sh 0.1.4
 ```
 
 Validate local binary mode:
@@ -214,7 +214,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.11 ./scripts/release.sh 0.1.3
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.1.4
 ```
 
 ## Release Model
