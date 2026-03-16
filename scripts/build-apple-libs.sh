@@ -227,15 +227,40 @@ write_framework_bundle() {
     local framework_dir
     local headers_dir
     local modules_dir
+    local resources_dir
+    local binary_path
+    local minimum_os_key="MinimumOSVersion"
 
     framework_dir="$(framework_dir_for_sdk "${sdk}")"
-    headers_dir="${framework_dir}/Headers"
-    modules_dir="${framework_dir}/Modules"
 
     rm -rf "${framework_dir}"
-    mkdir -p "${headers_dir}" "${modules_dir}"
+    if [[ "${sdk}" == macosx ]]; then
+        local versions_dir="${framework_dir}/Versions"
+        local version_dir="${versions_dir}/A"
 
-    libtool -static -o "${framework_dir}/${FRAMEWORK_NAME}" "${bridge_archive}" "${libtorrent_archive}"
+        headers_dir="${version_dir}/Headers"
+        modules_dir="${version_dir}/Modules"
+        resources_dir="${version_dir}/Resources"
+        binary_path="${version_dir}/${FRAMEWORK_NAME}"
+        minimum_os_key="LSMinimumSystemVersion"
+
+        mkdir -p "${headers_dir}" "${modules_dir}" "${resources_dir}"
+        mkdir -p "${versions_dir}"
+        ln -sfn "A" "${versions_dir}/Current"
+        ln -sfn "Versions/Current/Headers" "${framework_dir}/Headers"
+        ln -sfn "Versions/Current/Modules" "${framework_dir}/Modules"
+        ln -sfn "Versions/Current/Resources" "${framework_dir}/Resources"
+        ln -sfn "Versions/Current/${FRAMEWORK_NAME}" "${framework_dir}/${FRAMEWORK_NAME}"
+    else
+        headers_dir="${framework_dir}/Headers"
+        modules_dir="${framework_dir}/Modules"
+        resources_dir="${framework_dir}"
+        binary_path="${framework_dir}/${FRAMEWORK_NAME}"
+
+        mkdir -p "${headers_dir}" "${modules_dir}"
+    fi
+
+    libtool -static -o "${binary_path}" "${bridge_archive}" "${libtorrent_archive}"
 
     cp "${NATIVE_BRIDGE_DIR}/include/LibtorrentAppleBinary.h" "${headers_dir}/LibtorrentAppleBinary.h"
     cp "${NATIVE_BRIDGE_DIR}/include/libtorrent_apple_bridge.h" "${headers_dir}/libtorrent_apple_bridge.h"
@@ -249,7 +274,7 @@ framework module ${FRAMEWORK_NAME} {
 }
 EOF
 
-    cat > "${framework_dir}/Info.plist" <<EOF
+    cat > "${resources_dir}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -270,7 +295,7 @@ EOF
     <string>${LIBTORRENT_REF_RESOLVED:-dev}</string>
     <key>CFBundleVersion</key>
     <string>1</string>
-    <key>MinimumOSVersion</key>
+    <key>${minimum_os_key}</key>
     <string>${deployment_target}</string>
 </dict>
 </plist>

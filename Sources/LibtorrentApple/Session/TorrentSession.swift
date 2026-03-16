@@ -67,7 +67,7 @@ public actor TorrentSession {
     }
 
     public func statsUpdates(
-        pollInterval: Duration = .seconds(1),
+        pollInterval: TimeInterval = 1,
         emitInitialValue: Bool = true,
         onlyChanges: Bool = true
     ) -> AsyncStream<TorrentDownloaderStats> {
@@ -82,7 +82,7 @@ public actor TorrentSession {
                 }
 
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: pollInterval)
+                    try? await AsyncTiming.sleep(seconds: pollInterval)
                     if Task.isCancelled {
                         break
                     }
@@ -105,7 +105,7 @@ public actor TorrentSession {
 
     public func pieceUpdates(
         for id: TorrentID,
-        pollInterval: Duration = .seconds(1),
+        pollInterval: TimeInterval = 1,
         emitInitialValue: Bool = true,
         onlyChanges: Bool = true
     ) -> AsyncThrowingStream<TorrentPieceSnapshot, Error> {

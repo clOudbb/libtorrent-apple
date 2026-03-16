@@ -88,7 +88,7 @@ Task {
 }
 
 Task {
-    let statsStream = await downloader.statsUpdates(pollInterval: .seconds(1))
+    let statsStream = await downloader.statsUpdates(pollInterval: 1)
     for await stats in statsStream {
         print("running torrents:", stats.runningTorrentCount)
         print("download rate:", stats.aggregateDownloadRateBytesPerSecond)
@@ -111,7 +111,7 @@ let snapshot = try await controller.prepareForStreaming(
 print(snapshot.progress)
 
 Task {
-    let pieceUpdates = controller.updates(pollInterval: .seconds(1))
+    let pieceUpdates = controller.updates(pollInterval: 1)
     for try await nextSnapshot in pieceUpdates {
         print("completed pieces:", nextSnapshot.completedPieceCount)
     }

@@ -16,7 +16,7 @@ public struct TorrentDownloadController: Sendable {
     }
 
     public func updates(
-        pollInterval: Duration = .seconds(1),
+        pollInterval: TimeInterval = 1,
         emitInitialValue: Bool = true,
         onlyChanges: Bool = true
     ) -> AsyncThrowingStream<TorrentPieceSnapshot, Error> {
@@ -31,7 +31,7 @@ public struct TorrentDownloadController: Sendable {
                 }
 
                 while !Task.isCancelled {
-                    try await Task.sleep(for: pollInterval)
+                    try await AsyncTiming.sleep(seconds: pollInterval)
                     let nextSnapshot = try await snapshot()
                     if !onlyChanges || nextSnapshot.pieces != lastSnapshot?.pieces {
                         continuation.yield(nextSnapshot)

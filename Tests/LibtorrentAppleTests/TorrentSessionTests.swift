@@ -261,7 +261,7 @@ func downloaderStatsStreamAndFileDeletionWork() async throws {
         from: .torrentFile(torrentFileURL, displayName: "Episode 02")
     )
 
-    let statsStream = await downloader.statsUpdates(pollInterval: .milliseconds(50))
+    let statsStream = await downloader.statsUpdates(pollInterval: 0.05)
     var statsIterator = statsStream.makeAsyncIterator()
     let firstStats = await statsIterator.next()
 
@@ -274,7 +274,7 @@ func downloaderStatsStreamAndFileDeletionWork() async throws {
 
     let deletedURL = try await fileHandle.deleteLocalData()
     let controller = try await handle.downloadController()
-    let pieceStream = controller.updates(pollInterval: .milliseconds(50))
+    let pieceStream = controller.updates(pollInterval: 0.05)
     var pieceIterator = pieceStream.makeAsyncIterator()
     let pieceSnapshot = try await pieceIterator.next()
 

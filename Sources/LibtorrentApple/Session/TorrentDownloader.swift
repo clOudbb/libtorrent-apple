@@ -53,7 +53,7 @@ public actor TorrentDownloader {
     }
 
     public func statsUpdates(
-        pollInterval: Duration = .seconds(1),
+        pollInterval: TimeInterval = 1,
         emitInitialValue: Bool = true,
         onlyChanges: Bool = true
     ) async -> AsyncStream<TorrentDownloaderStats> {
@@ -103,8 +103,8 @@ public actor TorrentDownloader {
 
     public func fetchTorrent(
         from url: URL,
-        timeout: Duration = .seconds(30),
-        pollInterval: Duration = .milliseconds(250)
+        timeout: TimeInterval = 30,
+        pollInterval: TimeInterval = 0.25
     ) async throws -> EncodedTorrentInfo {
         guard let scheme = url.scheme?.lowercased() else {
             throw LibtorrentAppleError.unsupportedURLScheme(url.absoluteString)
@@ -203,8 +203,8 @@ public actor TorrentDownloader {
 
     private func fetchMagnetMetadata(
         from magnetURL: URL,
-        timeout: Duration,
-        pollInterval: Duration
+        timeout: TimeInterval,
+        pollInterval: TimeInterval
     ) async throws -> EncodedTorrentInfo {
         var scratchConfiguration = configuration
         scratchConfiguration.downloadDirectory = rootDirectory.appendingPathComponent("MetadataScratch", isDirectory: true)
@@ -218,8 +218,8 @@ public actor TorrentDownloader {
                 options: AddTorrentOptions(downloadDirectory: scratchConfiguration.downloadDirectory)
             )
 
-            let deadline = ContinuousClock.now.advanced(by: timeout)
-            while ContinuousClock.now < deadline {
+            let deadline = AsyncTiming.deadline(after: timeout)
+            while Date() < deadline {
                 do {
                     let data = try await handle.exportTorrentFile()
                     let status = try await handle.status()
@@ -231,7 +231,7 @@ public actor TorrentDownloader {
                     )
                 } catch let error as LibtorrentAppleError {
                     if case .metadataUnavailable = error {
-                        try await Task.sleep(for: pollInterval)
+                        try await AsyncTiming.sleep(seconds: pollInterval)
                         continue
                     }
 
