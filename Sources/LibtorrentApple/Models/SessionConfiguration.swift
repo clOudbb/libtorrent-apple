@@ -83,6 +83,11 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
     public var alertMask: Int32?
     public var userAgent: String
     public var handshakeClientVersion: String?
+    public var peerFingerprint: String?
+    public var dhtBootstrapNodes: [String]
+    public var shareRatioLimit: Int
+    public var peerBlockedCIDRs: [String]
+    public var peerAllowedCIDRs: [String]
     public var uploadRateLimitBytesPerSecond: Int
     public var downloadRateLimitBytesPerSecond: Int
     public var connectionsLimit: Int
@@ -111,6 +116,11 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         alertMask: Int32? = nil,
         userAgent: String = "libtorrent-apple/dev",
         handshakeClientVersion: String? = nil,
+        peerFingerprint: String? = nil,
+        dhtBootstrapNodes: [String] = [],
+        shareRatioLimit: Int = -1,
+        peerBlockedCIDRs: [String] = [],
+        peerAllowedCIDRs: [String] = [],
         uploadRateLimitBytesPerSecond: Int = 0,
         downloadRateLimitBytesPerSecond: Int = 0,
         connectionsLimit: Int = 0,
@@ -138,6 +148,11 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         self.alertMask = alertMask
         self.userAgent = userAgent
         self.handshakeClientVersion = handshakeClientVersion
+        self.peerFingerprint = peerFingerprint
+        self.dhtBootstrapNodes = dhtBootstrapNodes
+        self.shareRatioLimit = shareRatioLimit
+        self.peerBlockedCIDRs = peerBlockedCIDRs
+        self.peerAllowedCIDRs = peerAllowedCIDRs
         self.uploadRateLimitBytesPerSecond = uploadRateLimitBytesPerSecond
         self.downloadRateLimitBytesPerSecond = downloadRateLimitBytesPerSecond
         self.connectionsLimit = connectionsLimit
@@ -158,4 +173,127 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
     }
 
     public static let `default` = SessionConfiguration()
+
+    enum CodingKeys: String, CodingKey {
+        case downloadDirectory
+        case listenInterfaces
+        case enableDistributedHashTable
+        case enableLocalPeerDiscovery
+        case enableUPnP
+        case enableNATPMP
+        case alertMask
+        case userAgent
+        case handshakeClientVersion
+        case peerFingerprint
+        case dhtBootstrapNodes
+        case shareRatioLimit
+        case peerBlockedCIDRs
+        case peerAllowedCIDRs
+        case uploadRateLimitBytesPerSecond
+        case downloadRateLimitBytesPerSecond
+        case connectionsLimit
+        case activeDownloadsLimit
+        case activeSeedsLimit
+        case activeCheckingLimit
+        case activeDistributedHashTableLimit
+        case activeTrackerLimit
+        case activeLocalPeerDiscoveryLimit
+        case activeTorrentLimit
+        case maxQueuedDiskBytes
+        case sendBufferLowWatermarkBytes
+        case sendBufferWatermarkBytes
+        case sendBufferWatermarkFactorPercent
+        case autoSequentialDownload
+        case proxy
+        case encryption
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = SessionConfiguration.default
+
+        downloadDirectory = try container.decodeIfPresent(URL.self, forKey: .downloadDirectory)
+        listenInterfaces = try container.decodeIfPresent([String].self, forKey: .listenInterfaces) ?? defaults.listenInterfaces
+        enableDistributedHashTable = try container.decodeIfPresent(Bool.self, forKey: .enableDistributedHashTable)
+            ?? defaults.enableDistributedHashTable
+        enableLocalPeerDiscovery = try container.decodeIfPresent(Bool.self, forKey: .enableLocalPeerDiscovery)
+            ?? defaults.enableLocalPeerDiscovery
+        enableUPnP = try container.decodeIfPresent(Bool.self, forKey: .enableUPnP) ?? defaults.enableUPnP
+        enableNATPMP = try container.decodeIfPresent(Bool.self, forKey: .enableNATPMP) ?? defaults.enableNATPMP
+        alertMask = try container.decodeIfPresent(Int32.self, forKey: .alertMask)
+        userAgent = try container.decodeIfPresent(String.self, forKey: .userAgent) ?? defaults.userAgent
+        handshakeClientVersion = try container.decodeIfPresent(String.self, forKey: .handshakeClientVersion)
+        peerFingerprint = try container.decodeIfPresent(String.self, forKey: .peerFingerprint)
+        dhtBootstrapNodes = try container.decodeIfPresent([String].self, forKey: .dhtBootstrapNodes) ?? []
+        shareRatioLimit = try container.decodeIfPresent(Int.self, forKey: .shareRatioLimit) ?? defaults.shareRatioLimit
+        peerBlockedCIDRs = try container.decodeIfPresent([String].self, forKey: .peerBlockedCIDRs) ?? defaults.peerBlockedCIDRs
+        peerAllowedCIDRs = try container.decodeIfPresent([String].self, forKey: .peerAllowedCIDRs) ?? defaults.peerAllowedCIDRs
+        uploadRateLimitBytesPerSecond = try container.decodeIfPresent(Int.self, forKey: .uploadRateLimitBytesPerSecond)
+            ?? defaults.uploadRateLimitBytesPerSecond
+        downloadRateLimitBytesPerSecond = try container.decodeIfPresent(Int.self, forKey: .downloadRateLimitBytesPerSecond)
+            ?? defaults.downloadRateLimitBytesPerSecond
+        connectionsLimit = try container.decodeIfPresent(Int.self, forKey: .connectionsLimit) ?? defaults.connectionsLimit
+        activeDownloadsLimit = try container.decodeIfPresent(Int.self, forKey: .activeDownloadsLimit) ?? defaults.activeDownloadsLimit
+        activeSeedsLimit = try container.decodeIfPresent(Int.self, forKey: .activeSeedsLimit) ?? defaults.activeSeedsLimit
+        activeCheckingLimit = try container.decodeIfPresent(Int.self, forKey: .activeCheckingLimit) ?? defaults.activeCheckingLimit
+        activeDistributedHashTableLimit =
+            try container.decodeIfPresent(Int.self, forKey: .activeDistributedHashTableLimit)
+                ?? defaults.activeDistributedHashTableLimit
+        activeTrackerLimit = try container.decodeIfPresent(Int.self, forKey: .activeTrackerLimit) ?? defaults.activeTrackerLimit
+        activeLocalPeerDiscoveryLimit =
+            try container.decodeIfPresent(Int.self, forKey: .activeLocalPeerDiscoveryLimit)
+                ?? defaults.activeLocalPeerDiscoveryLimit
+        activeTorrentLimit = try container.decodeIfPresent(Int.self, forKey: .activeTorrentLimit) ?? defaults.activeTorrentLimit
+        maxQueuedDiskBytes = try container.decodeIfPresent(Int.self, forKey: .maxQueuedDiskBytes) ?? defaults.maxQueuedDiskBytes
+        sendBufferLowWatermarkBytes =
+            try container.decodeIfPresent(Int.self, forKey: .sendBufferLowWatermarkBytes)
+                ?? defaults.sendBufferLowWatermarkBytes
+        sendBufferWatermarkBytes =
+            try container.decodeIfPresent(Int.self, forKey: .sendBufferWatermarkBytes)
+                ?? defaults.sendBufferWatermarkBytes
+        sendBufferWatermarkFactorPercent =
+            try container.decodeIfPresent(Int.self, forKey: .sendBufferWatermarkFactorPercent)
+                ?? defaults.sendBufferWatermarkFactorPercent
+        autoSequentialDownload = try container.decodeIfPresent(Bool.self, forKey: .autoSequentialDownload)
+            ?? defaults.autoSequentialDownload
+        proxy = try container.decodeIfPresent(SessionProxyConfiguration.self, forKey: .proxy)
+        encryption = try container.decodeIfPresent(SessionEncryptionConfiguration.self, forKey: .encryption)
+            ?? defaults.encryption
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        try container.encodeIfPresent(downloadDirectory, forKey: .downloadDirectory)
+        try container.encode(listenInterfaces, forKey: .listenInterfaces)
+        try container.encode(enableDistributedHashTable, forKey: .enableDistributedHashTable)
+        try container.encode(enableLocalPeerDiscovery, forKey: .enableLocalPeerDiscovery)
+        try container.encode(enableUPnP, forKey: .enableUPnP)
+        try container.encode(enableNATPMP, forKey: .enableNATPMP)
+        try container.encodeIfPresent(alertMask, forKey: .alertMask)
+        try container.encode(userAgent, forKey: .userAgent)
+        try container.encodeIfPresent(handshakeClientVersion, forKey: .handshakeClientVersion)
+        try container.encodeIfPresent(peerFingerprint, forKey: .peerFingerprint)
+        try container.encode(dhtBootstrapNodes, forKey: .dhtBootstrapNodes)
+        try container.encode(shareRatioLimit, forKey: .shareRatioLimit)
+        try container.encode(peerBlockedCIDRs, forKey: .peerBlockedCIDRs)
+        try container.encode(peerAllowedCIDRs, forKey: .peerAllowedCIDRs)
+        try container.encode(uploadRateLimitBytesPerSecond, forKey: .uploadRateLimitBytesPerSecond)
+        try container.encode(downloadRateLimitBytesPerSecond, forKey: .downloadRateLimitBytesPerSecond)
+        try container.encode(connectionsLimit, forKey: .connectionsLimit)
+        try container.encode(activeDownloadsLimit, forKey: .activeDownloadsLimit)
+        try container.encode(activeSeedsLimit, forKey: .activeSeedsLimit)
+        try container.encode(activeCheckingLimit, forKey: .activeCheckingLimit)
+        try container.encode(activeDistributedHashTableLimit, forKey: .activeDistributedHashTableLimit)
+        try container.encode(activeTrackerLimit, forKey: .activeTrackerLimit)
+        try container.encode(activeLocalPeerDiscoveryLimit, forKey: .activeLocalPeerDiscoveryLimit)
+        try container.encode(activeTorrentLimit, forKey: .activeTorrentLimit)
+        try container.encode(maxQueuedDiskBytes, forKey: .maxQueuedDiskBytes)
+        try container.encode(sendBufferLowWatermarkBytes, forKey: .sendBufferLowWatermarkBytes)
+        try container.encode(sendBufferWatermarkBytes, forKey: .sendBufferWatermarkBytes)
+        try container.encode(sendBufferWatermarkFactorPercent, forKey: .sendBufferWatermarkFactorPercent)
+        try container.encode(autoSequentialDownload, forKey: .autoSequentialDownload)
+        try container.encodeIfPresent(proxy, forKey: .proxy)
+        try container.encode(encryption, forKey: .encryption)
+    }
 }

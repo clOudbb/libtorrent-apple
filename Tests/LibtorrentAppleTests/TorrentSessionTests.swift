@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import LibtorrentApple
 
+#if canImport(LibtorrentAppleBridge)
+private let supportsExtendedRuntimeBridgeAPIs = true
+#else
+private let supportsExtendedRuntimeBridgeAPIs = false
+#endif
+
 @Test
 func torrentSessionLifecycleAndStatusFlow() async throws {
     let session = TorrentSession()
@@ -224,9 +230,14 @@ func torrentHandleExposesFileAndPieceControls() async throws {
         TorrentTrackerUpdate(url: "https://tracker-1.example/announce", tier: 0),
         TorrentTrackerUpdate(url: "https://tracker-2.example/announce", tier: 1),
     ])
-    let addedTrackers = try await handle.addTracker(
-        TorrentTrackerUpdate(url: "https://tracker-3.example/announce", tier: 2)
+    let batchAddedTrackers = try await handle.addTrackers(
+        [
+            TorrentTrackerUpdate(url: "https://tracker-2.example/announce", tier: 1),
+            TorrentTrackerUpdate(url: "https://tracker-3.example/announce", tier: 2),
+        ],
+        forceReannounce: supportsExtendedRuntimeBridgeAPIs ? false : true
     )
+    let addedTrackers = try await handle.addTracker(TorrentTrackerUpdate(url: "https://tracker-4.example/announce", tier: 3))
     let streamingSnapshot = try await controller.prepareForStreaming(
         fileIndex: 0,
         leadPieceCount: 1,
@@ -237,9 +248,79 @@ func torrentHandleExposesFileAndPieceControls() async throws {
     #expect(saveDirectory == movedDirectory)
     #expect(updatedPiecePriorities == [.top])
     #expect(replacedTrackers.count == 2)
-    #expect(addedTrackers.count == 3)
+    #expect(batchAddedTrackers.count == 3)
+    #expect(addedTrackers.count == 4)
     #expect(streamingSnapshot.pieces.count == 1)
     #expect(streamingSnapshot.pieces[0].priority == .top)
+}
+
+@Test
+func runtimeApplyConfigurationAndSessionDiagnosticsWork() async throws {
+    let rootDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LibtorrentAppleApplyConfig-\(UUID().uuidString)", isDirectory: true)
+
+    var initialConfiguration = SessionConfiguration(downloadDirectory: rootDirectory)
+    initialConfiguration.peerFingerprint = "-OK0160-"
+    initialConfiguration.dhtBootstrapNodes = ["router.bittorrent.com:6881", "dht.libtorrent.org:25401"]
+    initialConfiguration.shareRatioLimit = 200
+
+    let session = TorrentSession(configuration: initialConfiguration)
+    try await session.start()
+
+    let source = TorrentSource.magnetLink(
+        URL(string: "magnet:?xt=urn:btih:1111222233334444555566667777888899990000")!,
+        displayName: "Apply Config"
+    )
+    _ = try await session.addTorrent(from: source)
+
+    var appliedConfiguration = initialConfiguration
+    appliedConfiguration.uploadRateLimitBytesPerSecond = 256 * 1024
+    appliedConfiguration.downloadRateLimitBytesPerSecond = 2 * 1024 * 1024
+    appliedConfiguration.connectionsLimit = 300
+    appliedConfiguration.activeTorrentLimit = 12
+    appliedConfiguration.autoSequentialDownload = true
+    appliedConfiguration.peerFingerprint = "-OK0161-"
+    appliedConfiguration.shareRatioLimit = 300
+    appliedConfiguration.peerBlockedCIDRs = ["10.0.0.0/8"]
+    appliedConfiguration.peerAllowedCIDRs = ["10.10.0.0/16"]
+
+    if !supportsExtendedRuntimeBridgeAPIs {
+        await #expect(throws: LibtorrentAppleError.self) {
+            try await session.applyConfiguration(appliedConfiguration)
+        }
+        return
+    }
+
+    try await session.applyConfiguration(appliedConfiguration)
+    let diagnostics = try await session.sessionDiagnostics()
+
+    #expect(await session.configuration.uploadRateLimitBytesPerSecond == appliedConfiguration.uploadRateLimitBytesPerSecond)
+    #expect(await session.configuration.downloadRateLimitBytesPerSecond == appliedConfiguration.downloadRateLimitBytesPerSecond)
+    #expect(await session.configuration.connectionsLimit == appliedConfiguration.connectionsLimit)
+    #expect(await session.configuration.activeTorrentLimit == appliedConfiguration.activeTorrentLimit)
+    #expect(await session.configuration.autoSequentialDownload == appliedConfiguration.autoSequentialDownload)
+    #expect(await session.configuration.peerFingerprint == appliedConfiguration.peerFingerprint)
+    #expect(await session.configuration.shareRatioLimit == appliedConfiguration.shareRatioLimit)
+    #expect(await session.configuration.peerBlockedCIDRs == appliedConfiguration.peerBlockedCIDRs)
+    #expect(await session.configuration.peerAllowedCIDRs == appliedConfiguration.peerAllowedCIDRs)
+    #expect(diagnostics.aggregateDownloadRateBytesPerSecond >= 0)
+    #expect(diagnostics.aggregateUploadRateBytesPerSecond >= 0)
+    #expect(diagnostics.totalConnections >= 0)
+    #expect(diagnostics.totalPeers >= 0)
+    #expect(diagnostics.totalSeeds >= 0)
+}
+
+@Test
+func animekoParityProfileAppliesExpectedDefaults() async throws {
+    var configuration = SessionConfiguration()
+    configuration.connectionsLimit = 0
+    configuration.dhtBootstrapNodes = []
+
+    configuration.applyProfile(.animekoParityV1)
+
+    #expect(configuration.connectionsLimit == 200)
+    #expect(configuration.dhtBootstrapNodes == SessionProfile.animekoParityV1.defaultDHTBootstrapNodes)
+    #expect(SessionProfile.animekoParityV1.defaultTrackerPreset.count == 20)
 }
 
 @Test

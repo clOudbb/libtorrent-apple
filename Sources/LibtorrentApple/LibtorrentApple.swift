@@ -56,6 +56,16 @@ struct BridgeNativeTorrentPiece: Sendable {
     let isDownloaded: Bool
 }
 
+struct BridgeNativeSessionStats: Sendable, Equatable {
+    let downloadRateBytesPerSecond: Int64
+    let uploadRateBytesPerSecond: Int64
+    let totalConnections: Int
+    let totalPeers: Int
+    let totalSeeds: Int
+    let isDHTEnabled: Bool
+    let dhtNodeCount: Int
+}
+
 public enum LibtorrentApple {
     public static let packageName = "LibtorrentApple"
     public static let bridgeVersion = String(cString: libtorrent_apple_bridge_version())
@@ -78,47 +88,7 @@ enum BridgeRuntime {
     static func createSession(configuration: SessionConfiguration) throws -> BridgeSessionHandle {
         try requireAvailable()
 
-        var nativeConfiguration = libtorrent_apple_session_configuration_default()
-        nativeConfiguration.enable_dht = configuration.enableDistributedHashTable
-        nativeConfiguration.enable_lsd = configuration.enableLocalPeerDiscovery
-        nativeConfiguration.enable_upnp = configuration.enableUPnP
-        nativeConfiguration.enable_natpmp = configuration.enableNATPMP
-        nativeConfiguration.listen_port = listenPort(from: configuration)
-        nativeConfiguration.alert_mask = configuration.alertMask ?? LIBTORRENT_APPLE_DEFAULT_ALERT_MASK
-        nativeConfiguration.upload_rate_limit = Int32(clamping: configuration.uploadRateLimitBytesPerSecond)
-        nativeConfiguration.download_rate_limit = Int32(clamping: configuration.downloadRateLimitBytesPerSecond)
-        nativeConfiguration.connections_limit = Int32(clamping: configuration.connectionsLimit)
-        nativeConfiguration.active_downloads_limit = Int32(clamping: configuration.activeDownloadsLimit)
-        nativeConfiguration.active_seeds_limit = Int32(clamping: configuration.activeSeedsLimit)
-        nativeConfiguration.active_checking_limit = Int32(clamping: configuration.activeCheckingLimit)
-        nativeConfiguration.active_dht_limit = Int32(clamping: configuration.activeDistributedHashTableLimit)
-        nativeConfiguration.active_tracker_limit = Int32(clamping: configuration.activeTrackerLimit)
-        nativeConfiguration.active_lsd_limit = Int32(clamping: configuration.activeLocalPeerDiscoveryLimit)
-        nativeConfiguration.active_limit = Int32(clamping: configuration.activeTorrentLimit)
-        nativeConfiguration.max_queued_disk_bytes = Int32(clamping: configuration.maxQueuedDiskBytes)
-        nativeConfiguration.send_buffer_low_watermark = Int32(clamping: configuration.sendBufferLowWatermarkBytes)
-        nativeConfiguration.send_buffer_watermark = Int32(clamping: configuration.sendBufferWatermarkBytes)
-        nativeConfiguration.send_buffer_watermark_factor = Int32(clamping: configuration.sendBufferWatermarkFactorPercent)
-        nativeConfiguration.out_enc_policy = configuration.encryption.outgoingPolicy.rawValue
-        nativeConfiguration.in_enc_policy = configuration.encryption.incomingPolicy.rawValue
-        nativeConfiguration.allowed_enc_level = configuration.encryption.allowedLevel.rawValue
-        nativeConfiguration.prefer_rc4 = configuration.encryption.preferRC4
-        nativeConfiguration.auto_sequential = configuration.autoSequentialDownload
-        encodeCString(configuration.userAgent, into: &nativeConfiguration.user_agent)
-        encodeCString(configuration.handshakeClientVersion ?? "", into: &nativeConfiguration.handshake_client_version)
-        encodeCString(configuration.listenInterfaces.joined(separator: ","), into: &nativeConfiguration.listen_interfaces)
-        if let proxy = configuration.proxy {
-            nativeConfiguration.proxy_type = proxy.type.rawValue
-            nativeConfiguration.proxy_port = Int32(clamping: proxy.port)
-            nativeConfiguration.proxy_hostnames = proxy.proxyHostnames
-            nativeConfiguration.proxy_peer_connections = proxy.proxyPeerConnections
-            nativeConfiguration.proxy_tracker_connections = proxy.proxyTrackerConnections
-            encodeCString(proxy.hostname, into: &nativeConfiguration.proxy_hostname)
-            encodeCString(proxy.username ?? "", into: &nativeConfiguration.proxy_username)
-            encodeCString(proxy.password ?? "", into: &nativeConfiguration.proxy_password)
-        } else {
-            nativeConfiguration.proxy_type = SessionProxyConfiguration.ProxyType.none.rawValue
-        }
+        var nativeConfiguration = makeNativeSessionConfiguration(from: configuration)
 
         var nativeSession: BridgeSessionHandle?
         var nativeError = libtorrent_apple_error_t()
@@ -132,6 +102,22 @@ enum BridgeRuntime {
         }
 
         return nativeSession
+    }
+
+    static func applyConfiguration(session: BridgeSessionHandle, configuration: SessionConfiguration) throws {
+        var nativeConfiguration = makeNativeSessionConfiguration(from: configuration)
+        var nativeError = libtorrent_apple_error_t()
+
+        #if canImport(LibtorrentAppleBridge)
+        guard libtorrent_apple_session_apply_configuration(session, &nativeConfiguration, &nativeError) else {
+            throw error(from: nativeError, fallbackMessage: "Failed to apply session configuration.")
+        }
+        #else
+        throw LibtorrentAppleError.nativeOperationFailed(
+            -1,
+            "Runtime configuration apply is unavailable in the current binary bridge."
+        )
+        #endif
     }
 
     static func destroySession(_ session: BridgeSessionHandle?) {
@@ -274,6 +260,32 @@ enum BridgeRuntime {
         }
 
         return nativeStatus
+    }
+
+    static func sessionStats(session: BridgeSessionHandle) throws -> BridgeNativeSessionStats {
+        #if canImport(LibtorrentAppleBridge)
+        var nativeStats = libtorrent_apple_session_stats_t()
+        var nativeError = libtorrent_apple_error_t()
+
+        guard libtorrent_apple_session_get_stats(session, &nativeStats, &nativeError) else {
+            throw error(from: nativeError, fallbackMessage: "Failed to fetch session diagnostics.")
+        }
+
+        return BridgeNativeSessionStats(
+            downloadRateBytesPerSecond: Int64(nativeStats.download_rate),
+            uploadRateBytesPerSecond: Int64(nativeStats.upload_rate),
+            totalConnections: Int(nativeStats.total_connections),
+            totalPeers: Int(nativeStats.total_peers),
+            totalSeeds: Int(nativeStats.total_seeds),
+            isDHTEnabled: nativeStats.dht_enabled,
+            dhtNodeCount: Int(nativeStats.dht_node_count)
+        )
+        #else
+        throw LibtorrentAppleError.nativeOperationFailed(
+            -1,
+            "Session diagnostics are unavailable in the current binary bridge."
+        )
+        #endif
     }
 
     static func popAlert(session: BridgeSessionHandle) throws -> BridgeNativeAlert? {
@@ -676,22 +688,69 @@ enum BridgeRuntime {
         id: TorrentID,
         tracker: TorrentTrackerUpdate
     ) throws {
-        var nativeError = libtorrent_apple_error_t()
-        var nativeTracker = libtorrent_apple_torrent_tracker_update_t()
-        nativeTracker.tier = Int32(clamping: tracker.tier)
-        encodeCString(tracker.url, into: &nativeTracker.url)
+        try addTrackers(
+            session: session,
+            id: id,
+            trackers: [tracker],
+            forceReannounce: true
+        )
+    }
 
+    static func addTrackers(
+        session: BridgeSessionHandle,
+        id: TorrentID,
+        trackers: [TorrentTrackerUpdate],
+        forceReannounce: Bool
+    ) throws {
+        guard !trackers.isEmpty else {
+            return
+        }
+
+        var nativeTrackers = trackers.map { tracker -> libtorrent_apple_torrent_tracker_update_t in
+            var nativeTracker = libtorrent_apple_torrent_tracker_update_t()
+            nativeTracker.tier = Int32(clamping: tracker.tier)
+            encodeCString(tracker.url, into: &nativeTracker.url)
+            return nativeTracker
+        }
+
+        var nativeError = libtorrent_apple_error_t()
+
+        #if canImport(LibtorrentAppleBridge)
         let succeeded = id.rawValue.withCString { infoHash in
-            libtorrent_apple_torrent_add_tracker(
-                session,
-                infoHash,
-                &nativeTracker,
-                &nativeError
+            nativeTrackers.withUnsafeMutableBufferPointer { buffer in
+                libtorrent_apple_torrent_add_trackers(
+                    session,
+                    infoHash,
+                    buffer.baseAddress,
+                    buffer.count,
+                    forceReannounce,
+                    &nativeError
+                )
+            }
+        }
+        #else
+        guard forceReannounce else {
+            throw LibtorrentAppleError.nativeOperationFailed(
+                -1,
+                "Batch tracker add without reannounce is unavailable in the current binary bridge."
             )
         }
 
+        let succeeded = id.rawValue.withCString { infoHash in
+            nativeTrackers.withUnsafeMutableBufferPointer { buffer in
+                for index in buffer.indices {
+                    var nativeTracker = buffer[index]
+                    guard libtorrent_apple_torrent_add_tracker(session, infoHash, &nativeTracker, &nativeError) else {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        #endif
+
         guard succeeded else {
-            throw error(from: nativeError, fallbackMessage: "Failed to add torrent tracker.")
+            throw error(from: nativeError, fallbackMessage: "Failed to add torrent trackers.")
         }
     }
 
@@ -888,6 +947,63 @@ enum BridgeRuntime {
         guard succeeded else {
             throw error(from: nativeError, fallbackMessage: fallbackMessage)
         }
+    }
+
+    private static func makeNativeSessionConfiguration(
+        from configuration: SessionConfiguration
+    ) -> libtorrent_apple_session_configuration_t {
+        var nativeConfiguration = libtorrent_apple_session_configuration_default()
+        nativeConfiguration.enable_dht = configuration.enableDistributedHashTable
+        nativeConfiguration.enable_lsd = configuration.enableLocalPeerDiscovery
+        nativeConfiguration.enable_upnp = configuration.enableUPnP
+        nativeConfiguration.enable_natpmp = configuration.enableNATPMP
+        nativeConfiguration.listen_port = listenPort(from: configuration)
+        nativeConfiguration.alert_mask = configuration.alertMask ?? LIBTORRENT_APPLE_DEFAULT_ALERT_MASK
+        nativeConfiguration.upload_rate_limit = Int32(clamping: configuration.uploadRateLimitBytesPerSecond)
+        nativeConfiguration.download_rate_limit = Int32(clamping: configuration.downloadRateLimitBytesPerSecond)
+        nativeConfiguration.connections_limit = Int32(clamping: configuration.connectionsLimit)
+        nativeConfiguration.active_downloads_limit = Int32(clamping: configuration.activeDownloadsLimit)
+        nativeConfiguration.active_seeds_limit = Int32(clamping: configuration.activeSeedsLimit)
+        nativeConfiguration.active_checking_limit = Int32(clamping: configuration.activeCheckingLimit)
+        nativeConfiguration.active_dht_limit = Int32(clamping: configuration.activeDistributedHashTableLimit)
+        nativeConfiguration.active_tracker_limit = Int32(clamping: configuration.activeTrackerLimit)
+        nativeConfiguration.active_lsd_limit = Int32(clamping: configuration.activeLocalPeerDiscoveryLimit)
+        nativeConfiguration.active_limit = Int32(clamping: configuration.activeTorrentLimit)
+        nativeConfiguration.max_queued_disk_bytes = Int32(clamping: configuration.maxQueuedDiskBytes)
+        nativeConfiguration.send_buffer_low_watermark = Int32(clamping: configuration.sendBufferLowWatermarkBytes)
+        nativeConfiguration.send_buffer_watermark = Int32(clamping: configuration.sendBufferWatermarkBytes)
+        nativeConfiguration.send_buffer_watermark_factor = Int32(clamping: configuration.sendBufferWatermarkFactorPercent)
+        nativeConfiguration.out_enc_policy = configuration.encryption.outgoingPolicy.rawValue
+        nativeConfiguration.in_enc_policy = configuration.encryption.incomingPolicy.rawValue
+        nativeConfiguration.allowed_enc_level = configuration.encryption.allowedLevel.rawValue
+        nativeConfiguration.prefer_rc4 = configuration.encryption.preferRC4
+        nativeConfiguration.auto_sequential = configuration.autoSequentialDownload
+        encodeCString(configuration.userAgent, into: &nativeConfiguration.user_agent)
+        encodeCString(configuration.handshakeClientVersion ?? "", into: &nativeConfiguration.handshake_client_version)
+        encodeCString(configuration.listenInterfaces.joined(separator: ","), into: &nativeConfiguration.listen_interfaces)
+
+        #if canImport(LibtorrentAppleBridge)
+        nativeConfiguration.share_ratio_limit = Int32(clamping: configuration.shareRatioLimit)
+        encodeCString(configuration.peerFingerprint ?? "", into: &nativeConfiguration.peer_fingerprint)
+        encodeCString(configuration.dhtBootstrapNodes.joined(separator: ","), into: &nativeConfiguration.dht_bootstrap_nodes)
+        encodeCString(configuration.peerBlockedCIDRs.joined(separator: ","), into: &nativeConfiguration.peer_blocked_cidrs)
+        encodeCString(configuration.peerAllowedCIDRs.joined(separator: ","), into: &nativeConfiguration.peer_allowed_cidrs)
+        #endif
+
+        if let proxy = configuration.proxy {
+            nativeConfiguration.proxy_type = proxy.type.rawValue
+            nativeConfiguration.proxy_port = Int32(clamping: proxy.port)
+            nativeConfiguration.proxy_hostnames = proxy.proxyHostnames
+            nativeConfiguration.proxy_peer_connections = proxy.proxyPeerConnections
+            nativeConfiguration.proxy_tracker_connections = proxy.proxyTrackerConnections
+            encodeCString(proxy.hostname, into: &nativeConfiguration.proxy_hostname)
+            encodeCString(proxy.username ?? "", into: &nativeConfiguration.proxy_username)
+            encodeCString(proxy.password ?? "", into: &nativeConfiguration.proxy_password)
+        } else {
+            nativeConfiguration.proxy_type = SessionProxyConfiguration.ProxyType.none.rawValue
+        }
+
+        return nativeConfiguration
     }
 
     private static func listenPort(from configuration: SessionConfiguration) -> Int32 {

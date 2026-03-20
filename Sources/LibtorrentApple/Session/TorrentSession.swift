@@ -151,6 +151,46 @@ public actor TorrentSession {
         }
     }
 
+    public func applyConfiguration(_ configuration: SessionConfiguration) throws {
+        if !isRunning {
+            self.configuration = configuration
+            return
+        }
+
+        guard configuration.downloadDirectory == self.configuration.downloadDirectory else {
+            throw LibtorrentAppleError.configurationInvalid(
+                "runtime apply does not support changing downloadDirectory; recreate the session instead"
+            )
+        }
+
+        let session = try requireRunningSession()
+        do {
+            try BridgeRuntime.applyConfiguration(session: session, configuration: configuration)
+            self.configuration = configuration
+            emitAlert(.nativeEvent, nativeEventName: "session_configuration_applied", message: "Applied session configuration.")
+        } catch {
+            throw translatedConfigurationError(error)
+        }
+    }
+
+    public func applyProfile(_ profile: SessionProfile) throws {
+        try applyConfiguration(configuration.applyingProfile(profile))
+    }
+
+    public func setPeerFilters(
+        blockedCIDRs: [String],
+        allowedCIDRs: [String] = []
+    ) throws {
+        var updated = configuration
+        updated.peerBlockedCIDRs = blockedCIDRs
+        updated.peerAllowedCIDRs = allowedCIDRs
+        try applyConfiguration(updated)
+    }
+
+    public func clearPeerFilters() throws {
+        try setPeerFilters(blockedCIDRs: [], allowedCIDRs: [])
+    }
+
     public func stop() {
         guard isRunning else {
             return
@@ -325,14 +365,32 @@ public actor TorrentSession {
         _ tracker: TorrentTrackerUpdate,
         for id: TorrentID
     ) throws -> [TorrentTracker] {
+        try addTrackers([tracker], for: id)
+    }
+
+    @discardableResult
+    public func addTrackers(
+        _ trackers: [TorrentTrackerUpdate],
+        for id: TorrentID,
+        forceReannounce: Bool = true
+    ) throws -> [TorrentTracker] {
+        guard !trackers.isEmpty else {
+            return try torrentTrackers(for: id)
+        }
+
         let session = try requireRunningSession()
         guard torrents[id] != nil else {
             throw LibtorrentAppleError.torrentNotFound(id)
         }
 
         do {
-            try BridgeRuntime.addTracker(session: session, id: id, tracker: tracker)
-            emitAlert(.torrentTrackerAdded, torrentID: id, message: "Added torrent tracker.")
+            try BridgeRuntime.addTrackers(
+                session: session,
+                id: id,
+                trackers: trackers,
+                forceReannounce: forceReannounce
+            )
+            emitAlert(.torrentTrackerAdded, torrentID: id, message: "Added \(trackers.count) torrent tracker(s).")
             return try torrentTrackers(for: id)
         } catch {
             throw translatedTrackerError(error)
@@ -614,6 +672,20 @@ public actor TorrentSession {
 
     public func totalStats() -> TorrentDownloaderStats {
         TorrentDownloaderStats(statuses: allTorrentStatuses())
+    }
+
+    public func sessionDiagnostics() throws -> TorrentSessionDiagnostics {
+        let session = try requireRunningSession()
+        let nativeStats = try BridgeRuntime.sessionStats(session: session)
+        return TorrentSessionDiagnostics(
+            aggregateDownloadRateBytesPerSecond: nativeStats.downloadRateBytesPerSecond,
+            aggregateUploadRateBytesPerSecond: nativeStats.uploadRateBytesPerSecond,
+            totalConnections: nativeStats.totalConnections,
+            totalPeers: nativeStats.totalPeers,
+            totalSeeds: nativeStats.totalSeeds,
+            isDHTEnabled: nativeStats.isDHTEnabled,
+            dhtNodeCount: nativeStats.dhtNodeCount
+        )
     }
 
     public func downloadDirectory(for id: TorrentID) throws -> URL {

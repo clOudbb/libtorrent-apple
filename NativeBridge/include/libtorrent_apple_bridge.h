@@ -26,6 +26,9 @@ extern "C" {
 #define LIBTORRENT_APPLE_PROXY_HOSTNAME_SIZE 256
 #define LIBTORRENT_APPLE_PROXY_USERNAME_SIZE 128
 #define LIBTORRENT_APPLE_PROXY_PASSWORD_SIZE 128
+#define LIBTORRENT_APPLE_PEER_FINGERPRINT_SIZE 96
+#define LIBTORRENT_APPLE_DHT_BOOTSTRAP_NODES_SIZE 1024
+#define LIBTORRENT_APPLE_PEER_FILTER_CIDRS_SIZE 2048
 #define LIBTORRENT_APPLE_ERROR_MESSAGE_SIZE 512
 #define LIBTORRENT_APPLE_DEFAULT_ALERT_MASK 65
 
@@ -41,6 +44,7 @@ typedef struct {
     int32_t alert_mask;
     int32_t upload_rate_limit;
     int32_t download_rate_limit;
+    int32_t share_ratio_limit;
     int32_t connections_limit;
     int32_t active_downloads_limit;
     int32_t active_seeds_limit;
@@ -73,6 +77,10 @@ typedef struct {
     char proxy_hostname[LIBTORRENT_APPLE_PROXY_HOSTNAME_SIZE];
     char proxy_username[LIBTORRENT_APPLE_PROXY_USERNAME_SIZE];
     char proxy_password[LIBTORRENT_APPLE_PROXY_PASSWORD_SIZE];
+    char peer_fingerprint[LIBTORRENT_APPLE_PEER_FINGERPRINT_SIZE];
+    char dht_bootstrap_nodes[LIBTORRENT_APPLE_DHT_BOOTSTRAP_NODES_SIZE];
+    char peer_blocked_cidrs[LIBTORRENT_APPLE_PEER_FILTER_CIDRS_SIZE];
+    char peer_allowed_cidrs[LIBTORRENT_APPLE_PEER_FILTER_CIDRS_SIZE];
 } libtorrent_apple_session_configuration_t;
 
 typedef struct {
@@ -151,6 +159,16 @@ typedef struct {
     bool downloaded;
 } libtorrent_apple_torrent_piece_t;
 
+typedef struct {
+    int32_t download_rate;
+    int32_t upload_rate;
+    int32_t total_connections;
+    int32_t total_peers;
+    int32_t total_seeds;
+    bool dht_enabled;
+    int32_t dht_node_count;
+} libtorrent_apple_session_stats_t;
+
 const char *libtorrent_apple_bridge_version(void);
 bool libtorrent_apple_bridge_is_available(void);
 
@@ -159,6 +177,12 @@ libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_
 bool libtorrent_apple_session_create(
     const libtorrent_apple_session_configuration_t *configuration,
     libtorrent_apple_session_t **session_out,
+    libtorrent_apple_error_t *error_out
+);
+
+bool libtorrent_apple_session_apply_configuration(
+    libtorrent_apple_session_t *session,
+    const libtorrent_apple_session_configuration_t *configuration,
     libtorrent_apple_error_t *error_out
 );
 
@@ -215,6 +239,12 @@ bool libtorrent_apple_session_get_torrent_status(
     libtorrent_apple_session_t *session,
     const char *info_hash_hex,
     libtorrent_apple_torrent_status_t *status_out,
+    libtorrent_apple_error_t *error_out
+);
+
+bool libtorrent_apple_session_get_stats(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_session_stats_t *stats_out,
     libtorrent_apple_error_t *error_out
 );
 
@@ -359,6 +389,15 @@ bool libtorrent_apple_torrent_add_tracker(
     libtorrent_apple_session_t *session,
     const char *info_hash_hex,
     const libtorrent_apple_torrent_tracker_update_t *tracker,
+    libtorrent_apple_error_t *error_out
+);
+
+bool libtorrent_apple_torrent_add_trackers(
+    libtorrent_apple_session_t *session,
+    const char *info_hash_hex,
+    const libtorrent_apple_torrent_tracker_update_t *trackers,
+    size_t tracker_count,
+    bool force_reannounce,
     libtorrent_apple_error_t *error_out
 );
 

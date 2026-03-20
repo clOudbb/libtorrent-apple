@@ -121,6 +121,14 @@ targets.append(
 )
 
 targets.append(
+    .executableTarget(
+        name: "LibtorrentAppleBenchmarkCLI",
+        dependencies: ["LibtorrentApple"],
+        path: "Sources/LibtorrentAppleBenchmarkCLI"
+    )
+)
+
+targets.append(
     .testTarget(
         name: "LibtorrentAppleTests",
         dependencies: ["LibtorrentApple"],
@@ -138,6 +146,10 @@ let package = Package(
         .library(
             name: "LibtorrentApple",
             targets: ["LibtorrentApple"]
+        ),
+        .executable(
+            name: "LibtorrentAppleBenchmarkCLI",
+            targets: ["LibtorrentAppleBenchmarkCLI"]
         ),
     ],
     targets: targets

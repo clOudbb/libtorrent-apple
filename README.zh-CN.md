@@ -118,6 +118,22 @@ Task {
 }
 ```
 
+### 5. 应用 animeko 对齐策略与 peer 过滤
+
+```swift
+var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
+configuration.shareRatioLimit = 200
+configuration.applyProfile(.animekoParityV1)
+
+let parityDownloader = TorrentDownloader(configuration: configuration)
+try await parityDownloader.start()
+try await parityDownloader.applyProfile(.animekoParityV1)
+try await parityDownloader.setPeerFilters(
+    blockedCIDRs: ["10.0.0.0/8"],
+    allowedCIDRs: []
+)
+```
+
 ### 5. 文件优先级、tracker 和 torrent 控制
 
 ```swift
@@ -199,6 +215,26 @@ print(try await restoredHandle.status().name)
 ```bash
 ./scripts/validate-swift-package.sh local-binary
 ```
+
+运行本地 benchmark demo（v0.2.0 P0-0）：
+
+```bash
+cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
+# 编辑 /tmp/benchmark-sources.txt，替换成你的磁力链接/.torrent 输入
+
+./scripts/run-benchmark-demo.sh source \
+  --profile animeko-parity \
+  --sources-file /tmp/benchmark-sources.txt \
+  --duration 300 \
+  --interval 1
+```
+
+demo 会输出：
+
+- `session_samples.csv`
+- `torrent_samples.csv`
+- `summary.json`
+- `samples.json`
 
 ## 指定其他 libtorrent 版本构建
 

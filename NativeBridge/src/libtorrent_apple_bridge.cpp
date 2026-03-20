@@ -3,12 +3,15 @@
 #include "libtorrent/add_torrent_params.hpp"
 #include "libtorrent/alert.hpp"
 #include "libtorrent/alert_types.hpp"
+#include "libtorrent/address.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/hex.hpp"
+#include "libtorrent/ip_filter.hpp"
 #include "libtorrent/magnet_uri.hpp"
 #include "libtorrent/read_resume_data.hpp"
 #include "libtorrent/session.hpp"
+#include "libtorrent/session_status.hpp"
 #include "libtorrent/settings_pack.hpp"
 #include "libtorrent/torrent_flags.hpp"
 #include "libtorrent/torrent_handle.hpp"
@@ -16,12 +19,17 @@
 #include "libtorrent/version.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
 #include <iterator>
+#include <unordered_set>
 #include <vector>
 
 namespace lt = libtorrent;
@@ -29,9 +37,13 @@ namespace lt = libtorrent;
 struct libtorrent_apple_session {
     std::unique_ptr<lt::session> handle;
     std::vector<libtorrent_apple_alert_t> pending_alerts;
+    libtorrent_apple_session_configuration_t configuration;
 };
 
 namespace {
+
+std::string config_string(char const *buffer);
+int default_alert_mask();
 
 void clear_error(libtorrent_apple_error_t *error_out)
 {
@@ -184,12 +196,609 @@ bool validate_tracker_updates(
     }
 
     for (std::size_t index = 0; index < tracker_count; ++index) {
-        if (trackers[index].url[0] == '\0') {
+        std::string const url = config_string(trackers[index].url);
+        auto const is_space = [](unsigned char character) {
+            return std::isspace(character) != 0;
+        };
+        auto const has_non_space = std::find_if_not(url.begin(), url.end(), is_space) != url.end();
+        if (!has_non_space) {
             return fail(error_out, -1, "tracker url must not be empty");
         }
     }
 
     return true;
+}
+
+std::string trim_copy(std::string value)
+{
+    auto const is_space = [](unsigned char character) {
+        return std::isspace(character) != 0;
+    };
+
+    value.erase(value.begin(), std::find_if_not(value.begin(), value.end(), is_space));
+    value.erase(std::find_if_not(value.rbegin(), value.rend(), is_space).base(), value.end());
+    return value;
+}
+
+bool parse_port(std::string const &value, int *port_out)
+{
+    if (port_out == nullptr || value.empty()) {
+        return false;
+    }
+
+    char *end = nullptr;
+    long const parsed = std::strtol(value.c_str(), &end, 10);
+    if (end == nullptr || *end != '\0') {
+        return false;
+    }
+
+    if (parsed <= 0 || parsed > std::numeric_limits<std::uint16_t>::max()) {
+        return false;
+    }
+
+    *port_out = static_cast<int>(parsed);
+    return true;
+}
+
+bool parse_dht_bootstrap_node(
+    std::string const &raw_node,
+    std::pair<std::string, int> *node_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (node_out == nullptr) {
+        return fail(error_out, -1, "internal error: node_out must not be null");
+    }
+
+    std::string const node = trim_copy(raw_node);
+    if (node.empty()) {
+        return fail(error_out, -1, "dht bootstrap node must not be empty");
+    }
+
+    std::string host;
+    std::string port_text;
+    if (node.front() == '[') {
+        std::size_t const right_bracket = node.find(']');
+        if (right_bracket == std::string::npos || right_bracket <= 1) {
+            return fail(error_out, -1, "invalid dht bootstrap node format (expected [ipv6]:port)");
+        }
+
+        host = node.substr(1, right_bracket - 1);
+        if (right_bracket + 1 >= node.size() || node[right_bracket + 1] != ':') {
+            return fail(error_out, -1, "invalid dht bootstrap node format (missing port)");
+        }
+        port_text = node.substr(right_bracket + 2);
+    } else {
+        std::size_t const colon = node.rfind(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= node.size()) {
+            return fail(error_out, -1, "invalid dht bootstrap node format (expected host:port)");
+        }
+
+        host = node.substr(0, colon);
+        port_text = node.substr(colon + 1);
+    }
+
+    host = trim_copy(host);
+    port_text = trim_copy(port_text);
+
+    int port = 0;
+    if (host.empty() || !parse_port(port_text, &port)) {
+        return fail(error_out, -1, "invalid dht bootstrap node port");
+    }
+
+    *node_out = std::make_pair(host, port);
+    return true;
+}
+
+bool parse_dht_bootstrap_nodes(
+    std::string const &raw_nodes,
+    std::vector<std::pair<std::string, int>> *nodes_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (nodes_out == nullptr) {
+        return fail(error_out, -1, "internal error: nodes_out must not be null");
+    }
+
+    nodes_out->clear();
+    if (raw_nodes.empty()) {
+        return true;
+    }
+
+    std::unordered_set<std::string> seen_nodes;
+    std::size_t start = 0;
+    while (start <= raw_nodes.size()) {
+        std::size_t const separator = raw_nodes.find(',', start);
+        std::string const segment = separator == std::string::npos
+            ? raw_nodes.substr(start)
+            : raw_nodes.substr(start, separator - start);
+        std::string const trimmed = trim_copy(segment);
+        if (!trimmed.empty()) {
+            std::pair<std::string, int> parsed_node;
+            if (!parse_dht_bootstrap_node(trimmed, &parsed_node, error_out)) {
+                return false;
+            }
+
+            std::string const key = parsed_node.first + ":" + std::to_string(parsed_node.second);
+            if (seen_nodes.insert(key).second) {
+                nodes_out->push_back(parsed_node);
+            }
+        }
+
+        if (separator == std::string::npos) {
+            break;
+        }
+
+        start = separator + 1;
+    }
+
+    return true;
+}
+
+template <std::size_t N>
+void apply_prefix_range(
+    std::array<unsigned char, N> *first,
+    std::array<unsigned char, N> *last,
+    int prefix_bits
+)
+{
+    if (first == nullptr || last == nullptr) {
+        return;
+    }
+
+    int remaining_bits = std::max(prefix_bits, 0);
+    for (std::size_t index = 0; index < N; ++index) {
+        if (remaining_bits >= 8) {
+            remaining_bits -= 8;
+            continue;
+        }
+
+        if (remaining_bits <= 0) {
+            (*first)[index] = 0x00;
+            (*last)[index] = 0xFF;
+            continue;
+        }
+
+        unsigned char const mask = static_cast<unsigned char>(0xFFu << (8 - remaining_bits));
+        (*first)[index] = static_cast<unsigned char>((*first)[index] & mask);
+        (*last)[index] = static_cast<unsigned char>((*last)[index] | static_cast<unsigned char>(~mask));
+        remaining_bits = 0;
+    }
+}
+
+bool parse_cidr_range(
+    std::string const &raw_cidr,
+    std::pair<lt::address, lt::address> *range_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (range_out == nullptr) {
+        return fail(error_out, -1, "internal error: range_out must not be null");
+    }
+
+    std::string const cidr = trim_copy(raw_cidr);
+    if (cidr.empty()) {
+        return fail(error_out, -1, "peer filter CIDR must not be empty");
+    }
+
+    std::size_t const slash = cidr.find('/');
+    std::string const address_part = trim_copy(slash == std::string::npos ? cidr : cidr.substr(0, slash));
+    std::string const prefix_part = slash == std::string::npos ? "" : trim_copy(cidr.substr(slash + 1));
+
+    lt::error_code parse_error;
+    lt::address const parsed_address = lt::make_address(address_part, parse_error);
+    if (parse_error) {
+        return fail(error_out, parse_error.value(), "invalid peer filter CIDR address");
+    }
+
+    int max_bits = parsed_address.is_v4() ? 32 : 128;
+    int prefix_bits = max_bits;
+    if (!prefix_part.empty()) {
+        char *end = nullptr;
+        long const parsed_prefix = std::strtol(prefix_part.c_str(), &end, 10);
+        if (end == nullptr || *end != '\0' || parsed_prefix < 0 || parsed_prefix > max_bits) {
+            return fail(error_out, -1, "invalid peer filter CIDR prefix");
+        }
+        prefix_bits = static_cast<int>(parsed_prefix);
+    }
+
+    if (parsed_address.is_v4()) {
+        std::array<unsigned char, 4> first = parsed_address.to_v4().to_bytes();
+        std::array<unsigned char, 4> last = first;
+        apply_prefix_range(&first, &last, prefix_bits);
+        *range_out = std::make_pair(lt::address_v4(first), lt::address_v4(last));
+        return true;
+    }
+
+    std::array<unsigned char, 16> first = parsed_address.to_v6().to_bytes();
+    std::array<unsigned char, 16> last = first;
+    apply_prefix_range(&first, &last, prefix_bits);
+    *range_out = std::make_pair(lt::address_v6(first), lt::address_v6(last));
+    return true;
+}
+
+bool parse_cidr_ranges(
+    std::string const &raw_cidrs,
+    std::vector<std::pair<lt::address, lt::address>> *ranges_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (ranges_out == nullptr) {
+        return fail(error_out, -1, "internal error: ranges_out must not be null");
+    }
+
+    ranges_out->clear();
+    if (raw_cidrs.empty()) {
+        return true;
+    }
+
+    std::unordered_set<std::string> seen;
+    std::size_t start = 0;
+    while (start <= raw_cidrs.size()) {
+        std::size_t const separator = raw_cidrs.find(',', start);
+        std::string const segment = separator == std::string::npos
+            ? raw_cidrs.substr(start)
+            : raw_cidrs.substr(start, separator - start);
+        std::string const trimmed = trim_copy(segment);
+        if (!trimmed.empty() && seen.insert(trimmed).second) {
+            std::pair<lt::address, lt::address> parsed_range;
+            if (!parse_cidr_range(trimmed, &parsed_range, error_out)) {
+                return false;
+            }
+            ranges_out->push_back(parsed_range);
+        }
+
+        if (separator == std::string::npos) {
+            break;
+        }
+        start = separator + 1;
+    }
+
+    return true;
+}
+
+void add_peer_filter_rules(
+    lt::ip_filter *filter,
+    std::vector<std::pair<lt::address, lt::address>> const &ranges,
+    std::uint32_t flags
+)
+{
+    if (filter == nullptr) {
+        return;
+    }
+
+    for (auto const &range : ranges) {
+        filter->add_rule(range.first, range.second, flags);
+    }
+}
+
+bool apply_peer_filters(
+    lt::session *session,
+    std::vector<std::pair<lt::address, lt::address>> const &blocked_ranges,
+    std::vector<std::pair<lt::address, lt::address>> const &allowed_ranges,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (session == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    lt::ip_filter filter;
+    bool const has_allow_rules = !allowed_ranges.empty();
+    bool const has_block_rules = !blocked_ranges.empty();
+    bool const has_any_rules = has_allow_rules || has_block_rules;
+
+    if (has_allow_rules) {
+        filter.add_rule(
+            lt::address_v4(std::array<unsigned char, 4>{0, 0, 0, 0}),
+            lt::address_v4(std::array<unsigned char, 4>{255, 255, 255, 255}),
+            lt::ip_filter::blocked
+        );
+        std::array<unsigned char, 16> const v6_min = {};
+        std::array<unsigned char, 16> v6_max = {};
+        v6_max.fill(0xFF);
+        filter.add_rule(lt::address_v6(v6_min), lt::address_v6(v6_max), lt::ip_filter::blocked);
+        add_peer_filter_rules(&filter, allowed_ranges, 0);
+    }
+
+    if (has_block_rules) {
+        add_peer_filter_rules(&filter, blocked_ranges, lt::ip_filter::blocked);
+    }
+
+    if (has_any_rules) {
+        session->set_ip_filter(filter);
+    } else {
+        session->set_ip_filter(lt::ip_filter{});
+    }
+
+    return true;
+}
+
+bool set_non_negative_int_setting(
+    lt::settings_pack *settings,
+    int key,
+    int32_t value,
+    bool runtime_mode
+)
+{
+    if (settings == nullptr) {
+        return false;
+    }
+
+    if (runtime_mode) {
+        settings->set_int(key, std::max(value, 0));
+    } else if (value > 0) {
+        settings->set_int(key, value);
+    }
+
+    return true;
+}
+
+bool apply_configuration_to_settings(
+    libtorrent_apple_session_configuration_t const &configuration,
+    lt::settings_pack *settings_out,
+    bool runtime_mode,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (settings_out == nullptr) {
+        return fail(error_out, -1, "settings_out must not be null");
+    }
+
+    lt::settings_pack &settings = *settings_out;
+
+    if (!runtime_mode) {
+        std::string const user_agent = config_string(configuration.user_agent);
+        settings.set_str(
+            lt::settings_pack::user_agent,
+            user_agent.empty() ? std::string("libtorrent-apple native bridge libtorrent/") + lt::version() : user_agent
+        );
+
+        std::string const handshake_client_version = config_string(configuration.handshake_client_version);
+        if (!handshake_client_version.empty()) {
+            settings.set_str(lt::settings_pack::handshake_client_version, handshake_client_version);
+        }
+
+        std::string listen_interfaces = config_string(configuration.listen_interfaces);
+        if (listen_interfaces.empty() && configuration.listen_port > 0) {
+            listen_interfaces =
+                "0.0.0.0:" + std::to_string(configuration.listen_port)
+                + ",[::]:" + std::to_string(configuration.listen_port);
+        }
+
+        if (!listen_interfaces.empty()) {
+            settings.set_str(lt::settings_pack::listen_interfaces, listen_interfaces);
+        }
+
+        settings.set_int(
+            lt::settings_pack::alert_mask,
+            configuration.alert_mask != 0 ? configuration.alert_mask : default_alert_mask()
+        );
+    }
+
+    set_non_negative_int_setting(&settings, lt::settings_pack::upload_rate_limit, configuration.upload_rate_limit, runtime_mode);
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::download_rate_limit,
+        configuration.download_rate_limit,
+        runtime_mode
+    );
+    if (configuration.share_ratio_limit >= 0) {
+        settings.set_int(lt::settings_pack::share_ratio_limit, configuration.share_ratio_limit);
+    }
+    set_non_negative_int_setting(&settings, lt::settings_pack::connections_limit, configuration.connections_limit, runtime_mode);
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::active_downloads,
+        configuration.active_downloads_limit,
+        runtime_mode
+    );
+    set_non_negative_int_setting(&settings, lt::settings_pack::active_seeds, configuration.active_seeds_limit, runtime_mode);
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::active_checking,
+        configuration.active_checking_limit,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::active_dht_limit,
+        configuration.active_dht_limit,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::active_tracker_limit,
+        configuration.active_tracker_limit,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::active_lsd_limit,
+        configuration.active_lsd_limit,
+        runtime_mode
+    );
+    set_non_negative_int_setting(&settings, lt::settings_pack::active_limit, configuration.active_limit, runtime_mode);
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::max_queued_disk_bytes,
+        configuration.max_queued_disk_bytes,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::send_buffer_low_watermark,
+        configuration.send_buffer_low_watermark,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::send_buffer_watermark,
+        configuration.send_buffer_watermark,
+        runtime_mode
+    );
+    set_non_negative_int_setting(
+        &settings,
+        lt::settings_pack::send_buffer_watermark_factor,
+        configuration.send_buffer_watermark_factor,
+        runtime_mode
+    );
+
+    if (!runtime_mode) {
+        settings.set_bool(lt::settings_pack::enable_dht, configuration.enable_dht);
+        settings.set_bool(lt::settings_pack::enable_lsd, configuration.enable_lsd);
+        settings.set_bool(lt::settings_pack::enable_upnp, configuration.enable_upnp);
+        settings.set_bool(lt::settings_pack::enable_natpmp, configuration.enable_natpmp);
+    }
+    settings.set_bool(lt::settings_pack::auto_sequential, configuration.auto_sequential);
+    settings.set_bool(lt::settings_pack::prefer_rc4, configuration.prefer_rc4);
+    settings.set_bool(lt::settings_pack::proxy_hostnames, configuration.proxy_hostnames);
+    settings.set_bool(lt::settings_pack::proxy_peer_connections, configuration.proxy_peer_connections);
+    settings.set_bool(lt::settings_pack::proxy_tracker_connections, configuration.proxy_tracker_connections);
+    settings.set_int(lt::settings_pack::out_enc_policy, configuration.out_enc_policy);
+    settings.set_int(lt::settings_pack::in_enc_policy, configuration.in_enc_policy);
+    settings.set_int(lt::settings_pack::allowed_enc_level, configuration.allowed_enc_level);
+
+    std::string const proxy_hostname = config_string(configuration.proxy_hostname);
+    std::string const proxy_username = config_string(configuration.proxy_username);
+    std::string const proxy_password = config_string(configuration.proxy_password);
+
+    if (runtime_mode || !proxy_hostname.empty()) {
+        settings.set_str(lt::settings_pack::proxy_hostname, proxy_hostname);
+    }
+
+    if (runtime_mode || !proxy_username.empty()) {
+        settings.set_str(lt::settings_pack::proxy_username, proxy_username);
+    }
+
+    if (runtime_mode || !proxy_password.empty()) {
+        settings.set_str(lt::settings_pack::proxy_password, proxy_password);
+    }
+
+    if (runtime_mode) {
+        settings.set_int(lt::settings_pack::proxy_port, std::max(configuration.proxy_port, 0));
+    } else if (configuration.proxy_port > 0) {
+        settings.set_int(lt::settings_pack::proxy_port, configuration.proxy_port);
+    }
+    settings.set_int(lt::settings_pack::proxy_type, configuration.proxy_type);
+
+    std::string const peer_fingerprint = config_string(configuration.peer_fingerprint);
+    if (runtime_mode || !peer_fingerprint.empty()) {
+        settings.set_str(lt::settings_pack::peer_fingerprint, peer_fingerprint);
+    }
+
+    std::string const dht_bootstrap_nodes = config_string(configuration.dht_bootstrap_nodes);
+    if (runtime_mode || !dht_bootstrap_nodes.empty()) {
+        settings.set_str(lt::settings_pack::dht_bootstrap_nodes, dht_bootstrap_nodes);
+    }
+
+    return true;
+}
+
+bool check_runtime_configuration_change(
+    bool changed,
+    char const *field_name,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (!changed) {
+        return true;
+    }
+
+    return fail(
+        error_out,
+        -1,
+        std::string("runtime apply does not support changing ") + field_name + "; recreate the session instead"
+    );
+}
+
+bool runtime_configuration_is_supported(
+    libtorrent_apple_session_configuration_t const &current,
+    libtorrent_apple_session_configuration_t const &requested,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (!check_runtime_configuration_change(current.listen_port != requested.listen_port, "listen_port", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(current.alert_mask != requested.alert_mask, "alert_mask", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(current.enable_dht != requested.enable_dht, "enable_dht", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(current.enable_lsd != requested.enable_lsd, "enable_lsd", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(current.enable_upnp != requested.enable_upnp, "enable_upnp", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(current.enable_natpmp != requested.enable_natpmp, "enable_natpmp", error_out)) {
+        return false;
+    }
+    if (!check_runtime_configuration_change(
+            config_string(current.user_agent) != config_string(requested.user_agent),
+            "user_agent",
+            error_out
+        ))
+    {
+        return false;
+    }
+    if (!check_runtime_configuration_change(
+            config_string(current.handshake_client_version) != config_string(requested.handshake_client_version),
+            "handshake_client_version",
+            error_out
+        ))
+    {
+        return false;
+    }
+    if (!check_runtime_configuration_change(
+            config_string(current.listen_interfaces) != config_string(requested.listen_interfaces),
+            "listen_interfaces",
+            error_out
+        ))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void add_dht_bootstrap_nodes(
+    lt::session *session,
+    std::vector<std::pair<std::string, int>> const &nodes
+)
+{
+    if (session == nullptr) {
+        return;
+    }
+
+    for (auto const &node : nodes) {
+        session->add_dht_node(node);
+    }
+}
+
+std::vector<lt::announce_entry> deduplicated_tracker_entries(
+    libtorrent_apple_torrent_tracker_update_t const *trackers,
+    std::size_t tracker_count
+)
+{
+    std::vector<lt::announce_entry> entries;
+    entries.reserve(tracker_count);
+
+    std::unordered_set<std::string> seen_urls;
+    for (std::size_t index = 0; index < tracker_count; ++index) {
+        std::string const url = trim_copy(config_string(trackers[index].url));
+        if (url.empty() || !seen_urls.insert(url).second) {
+            continue;
+        }
+
+        lt::announce_entry entry(url);
+        entry.tier = trackers[index].tier;
+        entries.push_back(std::move(entry));
+    }
+
+    return entries;
 }
 
 int priority_value(lt::download_priority_t priority)
@@ -455,6 +1064,7 @@ libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_
 {
     libtorrent_apple_session_configuration_t configuration = {};
     configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
+    configuration.share_ratio_limit = -1;
     configuration.enable_dht = true;
     configuration.enable_lsd = true;
     configuration.enable_upnp = true;
@@ -484,141 +1094,45 @@ bool libtorrent_apple_session_create(
 
     try {
         lt::settings_pack settings;
-        std::string const user_agent = config_string(effective_configuration.user_agent);
-        settings.set_str(
-            lt::settings_pack::user_agent,
-            user_agent.empty() ? std::string("libtorrent-apple native bridge libtorrent/") + lt::version() : user_agent
-        );
-
-        std::string const handshake_client_version = config_string(effective_configuration.handshake_client_version);
-        if (!handshake_client_version.empty()) {
-            settings.set_str(lt::settings_pack::handshake_client_version, handshake_client_version);
+        if (!apply_configuration_to_settings(effective_configuration, &settings, false, error_out)) {
+            return false;
         }
 
-        std::string listen_interfaces = config_string(effective_configuration.listen_interfaces);
-        if (listen_interfaces.empty() && effective_configuration.listen_port > 0) {
-            listen_interfaces =
-                "0.0.0.0:" + std::to_string(effective_configuration.listen_port)
-                + ",[::]:" + std::to_string(effective_configuration.listen_port);
+        std::vector<std::pair<std::string, int>> dht_bootstrap_nodes;
+        if (!parse_dht_bootstrap_nodes(
+                config_string(effective_configuration.dht_bootstrap_nodes),
+                &dht_bootstrap_nodes,
+                error_out
+            ))
+        {
+            return false;
         }
-
-        if (!listen_interfaces.empty()) {
-            settings.set_str(lt::settings_pack::listen_interfaces, listen_interfaces);
+        std::vector<std::pair<lt::address, lt::address>> blocked_cidrs;
+        if (!parse_cidr_ranges(
+                config_string(effective_configuration.peer_blocked_cidrs),
+                &blocked_cidrs,
+                error_out
+            ))
+        {
+            return false;
         }
-
-        settings.set_int(
-            lt::settings_pack::alert_mask,
-            effective_configuration.alert_mask != 0 ? effective_configuration.alert_mask : default_alert_mask()
-        );
-
-        if (effective_configuration.upload_rate_limit > 0) {
-            settings.set_int(lt::settings_pack::upload_rate_limit, effective_configuration.upload_rate_limit);
+        std::vector<std::pair<lt::address, lt::address>> allowed_cidrs;
+        if (!parse_cidr_ranges(
+                config_string(effective_configuration.peer_allowed_cidrs),
+                &allowed_cidrs,
+                error_out
+            ))
+        {
+            return false;
         }
-
-        if (effective_configuration.download_rate_limit > 0) {
-            settings.set_int(lt::settings_pack::download_rate_limit, effective_configuration.download_rate_limit);
-        }
-
-        if (effective_configuration.connections_limit > 0) {
-            settings.set_int(lt::settings_pack::connections_limit, effective_configuration.connections_limit);
-        }
-
-        if (effective_configuration.active_downloads_limit > 0) {
-            settings.set_int(lt::settings_pack::active_downloads, effective_configuration.active_downloads_limit);
-        }
-
-        if (effective_configuration.active_seeds_limit > 0) {
-            settings.set_int(lt::settings_pack::active_seeds, effective_configuration.active_seeds_limit);
-        }
-
-        if (effective_configuration.active_checking_limit > 0) {
-            settings.set_int(lt::settings_pack::active_checking, effective_configuration.active_checking_limit);
-        }
-
-        if (effective_configuration.active_dht_limit > 0) {
-            settings.set_int(lt::settings_pack::active_dht_limit, effective_configuration.active_dht_limit);
-        }
-
-        if (effective_configuration.active_tracker_limit > 0) {
-            settings.set_int(lt::settings_pack::active_tracker_limit, effective_configuration.active_tracker_limit);
-        }
-
-        if (effective_configuration.active_lsd_limit > 0) {
-            settings.set_int(lt::settings_pack::active_lsd_limit, effective_configuration.active_lsd_limit);
-        }
-
-        if (effective_configuration.active_limit > 0) {
-            settings.set_int(lt::settings_pack::active_limit, effective_configuration.active_limit);
-        }
-
-        if (effective_configuration.max_queued_disk_bytes > 0) {
-            settings.set_int(lt::settings_pack::max_queued_disk_bytes, effective_configuration.max_queued_disk_bytes);
-        }
-
-        if (effective_configuration.send_buffer_low_watermark > 0) {
-            settings.set_int(
-                lt::settings_pack::send_buffer_low_watermark,
-                effective_configuration.send_buffer_low_watermark
-            );
-        }
-
-        if (effective_configuration.send_buffer_watermark > 0) {
-            settings.set_int(
-                lt::settings_pack::send_buffer_watermark,
-                effective_configuration.send_buffer_watermark
-            );
-        }
-
-        if (effective_configuration.send_buffer_watermark_factor > 0) {
-            settings.set_int(
-                lt::settings_pack::send_buffer_watermark_factor,
-                effective_configuration.send_buffer_watermark_factor
-            );
-        }
-
-        settings.set_bool(lt::settings_pack::enable_dht, effective_configuration.enable_dht);
-        settings.set_bool(lt::settings_pack::enable_lsd, effective_configuration.enable_lsd);
-        settings.set_bool(lt::settings_pack::enable_upnp, effective_configuration.enable_upnp);
-        settings.set_bool(lt::settings_pack::enable_natpmp, effective_configuration.enable_natpmp);
-        settings.set_bool(lt::settings_pack::auto_sequential, effective_configuration.auto_sequential);
-        settings.set_bool(lt::settings_pack::prefer_rc4, effective_configuration.prefer_rc4);
-        settings.set_bool(lt::settings_pack::proxy_hostnames, effective_configuration.proxy_hostnames);
-        settings.set_bool(
-            lt::settings_pack::proxy_peer_connections,
-            effective_configuration.proxy_peer_connections
-        );
-        settings.set_bool(
-            lt::settings_pack::proxy_tracker_connections,
-            effective_configuration.proxy_tracker_connections
-        );
-        settings.set_int(lt::settings_pack::out_enc_policy, effective_configuration.out_enc_policy);
-        settings.set_int(lt::settings_pack::in_enc_policy, effective_configuration.in_enc_policy);
-        settings.set_int(lt::settings_pack::allowed_enc_level, effective_configuration.allowed_enc_level);
-
-        std::string const proxy_hostname = config_string(effective_configuration.proxy_hostname);
-        std::string const proxy_username = config_string(effective_configuration.proxy_username);
-        std::string const proxy_password = config_string(effective_configuration.proxy_password);
-
-        if (!proxy_hostname.empty()) {
-            settings.set_str(lt::settings_pack::proxy_hostname, proxy_hostname);
-        }
-
-        if (!proxy_username.empty()) {
-            settings.set_str(lt::settings_pack::proxy_username, proxy_username);
-        }
-
-        if (!proxy_password.empty()) {
-            settings.set_str(lt::settings_pack::proxy_password, proxy_password);
-        }
-
-        if (effective_configuration.proxy_port > 0) {
-            settings.set_int(lt::settings_pack::proxy_port, effective_configuration.proxy_port);
-        }
-
-        settings.set_int(lt::settings_pack::proxy_type, effective_configuration.proxy_type);
 
         auto wrapper = std::make_unique<libtorrent_apple_session_t>();
         wrapper->handle = std::make_unique<lt::session>(lt::session_params(settings));
+        wrapper->configuration = effective_configuration;
+        add_dht_bootstrap_nodes(wrapper->handle.get(), dht_bootstrap_nodes);
+        if (!apply_peer_filters(wrapper->handle.get(), blocked_cidrs, allowed_cidrs, error_out)) {
+            return false;
+        }
         *session_out = wrapper.release();
         return true;
     } catch (std::exception const &exception) {
@@ -629,6 +1143,72 @@ bool libtorrent_apple_session_create(
 void libtorrent_apple_session_destroy(libtorrent_apple_session_t *session)
 {
     delete session;
+}
+
+bool libtorrent_apple_session_apply_configuration(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_session_configuration_t const *configuration,
+    libtorrent_apple_error_t *error_out
+)
+{
+    clear_error(error_out);
+
+    if (session == nullptr || session->handle == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (configuration == nullptr) {
+        return fail(error_out, -1, "configuration must not be null");
+    }
+
+    if (!runtime_configuration_is_supported(session->configuration, *configuration, error_out)) {
+        return false;
+    }
+
+    try {
+        lt::settings_pack settings;
+        if (!apply_configuration_to_settings(*configuration, &settings, true, error_out)) {
+            return false;
+        }
+
+        std::vector<std::pair<std::string, int>> dht_bootstrap_nodes;
+        if (!parse_dht_bootstrap_nodes(
+                config_string(configuration->dht_bootstrap_nodes),
+                &dht_bootstrap_nodes,
+                error_out
+            ))
+        {
+            return false;
+        }
+        std::vector<std::pair<lt::address, lt::address>> blocked_cidrs;
+        if (!parse_cidr_ranges(
+                config_string(configuration->peer_blocked_cidrs),
+                &blocked_cidrs,
+                error_out
+            ))
+        {
+            return false;
+        }
+        std::vector<std::pair<lt::address, lt::address>> allowed_cidrs;
+        if (!parse_cidr_ranges(
+                config_string(configuration->peer_allowed_cidrs),
+                &allowed_cidrs,
+                error_out
+            ))
+        {
+            return false;
+        }
+
+        session->handle->apply_settings(settings);
+        add_dht_bootstrap_nodes(session->handle.get(), dht_bootstrap_nodes);
+        if (!apply_peer_filters(session->handle.get(), blocked_cidrs, allowed_cidrs, error_out)) {
+            return false;
+        }
+        session->configuration = *configuration;
+        return true;
+    } catch (std::exception const &exception) {
+        return fail(error_out, -2, exception.what());
+    }
 }
 
 bool libtorrent_apple_session_add_magnet(
@@ -885,6 +1465,63 @@ bool libtorrent_apple_session_get_torrent_status(
         return true;
     } catch (std::exception const &exception) {
         std::memset(status_out, 0, sizeof(*status_out));
+        return fail(error_out, -2, exception.what());
+    }
+}
+
+bool libtorrent_apple_session_get_stats(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_session_stats_t *stats_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    clear_error(error_out);
+
+    if (stats_out == nullptr) {
+        return fail(error_out, -1, "stats_out must not be null");
+    }
+
+    std::memset(stats_out, 0, sizeof(*stats_out));
+
+    if (session == nullptr || session->handle == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    auto const clamp_int32 = [](std::int64_t value) {
+        if (value > std::numeric_limits<int32_t>::max()) {
+            return std::numeric_limits<int32_t>::max();
+        }
+        if (value < std::numeric_limits<int32_t>::min()) {
+            return std::numeric_limits<int32_t>::min();
+        }
+        return static_cast<int32_t>(value);
+    };
+
+    try {
+        lt::session_status const session_status = session->handle->status();
+        std::int64_t total_peers = 0;
+        std::int64_t total_seeds = 0;
+
+        for (lt::torrent_handle const &handle : session->handle->get_torrents()) {
+            if (!handle.is_valid()) {
+                continue;
+            }
+
+            lt::torrent_status const status = handle.status();
+            total_peers += std::max(status.num_peers, 0);
+            total_seeds += std::max(status.num_seeds, 0);
+        }
+
+        stats_out->download_rate = clamp_int32(session_status.download_rate);
+        stats_out->upload_rate = clamp_int32(session_status.upload_rate);
+        stats_out->total_connections = clamp_int32(session_status.num_peers);
+        stats_out->total_peers = clamp_int32(total_peers);
+        stats_out->total_seeds = clamp_int32(total_seeds);
+        stats_out->dht_enabled = session->configuration.enable_dht;
+        stats_out->dht_node_count = clamp_int32(session_status.dht_nodes);
+        return true;
+    } catch (std::exception const &exception) {
+        std::memset(stats_out, 0, sizeof(*stats_out));
         return fail(error_out, -2, exception.what());
     }
 }
@@ -1551,17 +2188,11 @@ bool libtorrent_apple_torrent_replace_trackers(
     }
 
     try {
-        std::vector<lt::announce_entry> updated_trackers;
-        updated_trackers.reserve(tracker_count);
-
-        for (size_t index = 0; index < tracker_count; ++index) {
-            lt::announce_entry entry(trackers[index].url);
-            entry.tier = trackers[index].tier;
-            updated_trackers.push_back(std::move(entry));
-        }
-
+        std::vector<lt::announce_entry> const updated_trackers = deduplicated_tracker_entries(trackers, tracker_count);
         handle.replace_trackers(updated_trackers);
-        handle.post_trackers();
+        if (!updated_trackers.empty()) {
+            handle.post_trackers();
+        }
         return true;
     } catch (std::exception const &exception) {
         return fail(error_out, -2, exception.what());
@@ -1575,9 +2206,28 @@ bool libtorrent_apple_torrent_add_tracker(
     libtorrent_apple_error_t *error_out
 )
 {
+    return libtorrent_apple_torrent_add_trackers(
+        session,
+        info_hash_hex,
+        tracker,
+        tracker != nullptr ? 1 : 0,
+        true,
+        error_out
+    );
+}
+
+bool libtorrent_apple_torrent_add_trackers(
+    libtorrent_apple_session_t *session,
+    char const *info_hash_hex,
+    libtorrent_apple_torrent_tracker_update_t const *trackers,
+    size_t tracker_count,
+    bool force_reannounce,
+    libtorrent_apple_error_t *error_out
+)
+{
     clear_error(error_out);
 
-    if (!validate_tracker_updates(tracker, tracker != nullptr ? 1 : 0, error_out)) {
+    if (!validate_tracker_updates(trackers, tracker_count, error_out)) {
         return false;
     }
 
@@ -1587,10 +2237,25 @@ bool libtorrent_apple_torrent_add_tracker(
     }
 
     try {
-        lt::announce_entry entry(tracker->url);
-        entry.tier = tracker->tier;
-        handle.add_tracker(entry);
-        handle.post_trackers();
+        std::vector<lt::announce_entry> const unique_updates = deduplicated_tracker_entries(trackers, tracker_count);
+        std::unordered_set<std::string> existing_urls;
+        for (lt::announce_entry const &existing : handle.trackers()) {
+            existing_urls.insert(trim_copy(existing.url));
+        }
+
+        std::size_t added_count = 0;
+        for (lt::announce_entry const &entry : unique_updates) {
+            if (!existing_urls.insert(trim_copy(entry.url)).second) {
+                continue;
+            }
+
+            handle.add_tracker(entry);
+            added_count += 1;
+        }
+
+        if (force_reannounce && added_count > 0) {
+            handle.post_trackers();
+        }
         return true;
     } catch (std::exception const &exception) {
         return fail(error_out, -2, exception.what());

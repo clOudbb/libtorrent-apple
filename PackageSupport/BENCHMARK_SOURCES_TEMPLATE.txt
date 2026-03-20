@@ -1,0 +1,10 @@
+# One source per line.
+# Supported forms:
+#   magnet|<magnet-uri>|<optional-display-name>
+#   file|<path-to-torrent>|<optional-display-name>
+# Or simple lines:
+#   magnet:?xt=urn:btih:...
+#   /absolute/or/relative/path/to/file.torrent
+
+# magnet|magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567|Sample Magnet
+# file|/path/to/sample.torrent|Sample Torrent File

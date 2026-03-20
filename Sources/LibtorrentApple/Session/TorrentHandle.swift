@@ -111,6 +111,14 @@ public struct TorrentHandle: Sendable, Identifiable {
         try await session.addTracker(tracker, for: id)
     }
 
+    @discardableResult
+    public func addTrackers(
+        _ trackers: [TorrentTrackerUpdate],
+        forceReannounce: Bool = true
+    ) async throws -> [TorrentTracker] {
+        try await session.addTrackers(trackers, for: id, forceReannounce: forceReannounce)
+    }
+
     public func peers() async throws -> [TorrentPeer] {
         try await session.torrentPeers(for: id)
     }

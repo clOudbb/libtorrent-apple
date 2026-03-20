@@ -4,12 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PLACEHOLDER_TRACKER_CAPACITY 32
+
 typedef struct placeholder_torrent {
     char info_hash[LIBTORRENT_APPLE_INFO_HASH_HEX_SIZE];
     char name[LIBTORRENT_APPLE_TORRENT_NAME_SIZE];
     char download_path[LIBTORRENT_APPLE_TORRENT_FILE_PATH_SIZE];
-    char tracker_urls[4][LIBTORRENT_APPLE_TORRENT_TRACKER_URL_SIZE];
-    int32_t tracker_tiers[4];
+    char tracker_urls[PLACEHOLDER_TRACKER_CAPACITY][LIBTORRENT_APPLE_TORRENT_TRACKER_URL_SIZE];
+    int32_t tracker_tiers[PLACEHOLDER_TRACKER_CAPACITY];
     size_t tracker_count;
     int paused;
     int sequential_download;
@@ -228,6 +230,22 @@ static placeholder_torrent_t *find_torrent(
     return NULL;
 }
 
+static int tracker_exists(const placeholder_torrent_t *torrent, const char *url) {
+    size_t index;
+
+    if (torrent == NULL || url == NULL || url[0] == '\0') {
+        return 0;
+    }
+
+    for (index = 0; index < torrent->tracker_count; index += 1) {
+        if (strncmp(torrent->tracker_urls[index], url, LIBTORRENT_APPLE_TORRENT_TRACKER_URL_SIZE) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static int add_placeholder_torrent(
     libtorrent_apple_session_t *session,
     const char *name_hint,
@@ -284,6 +302,7 @@ bool libtorrent_apple_bridge_is_available(void) {
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void) {
     libtorrent_apple_session_configuration_t configuration = {0};
     configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
+    configuration.share_ratio_limit = -1;
     configuration.enable_dht = true;
     configuration.enable_lsd = true;
     configuration.enable_upnp = true;
@@ -319,6 +338,26 @@ bool libtorrent_apple_session_create(
     session->alerts_tail = NULL;
     *session_out = session;
     push_alert(session, 1000, "placeholder_session_started", "Placeholder session started.", "");
+    return true;
+}
+
+bool libtorrent_apple_session_apply_configuration(
+    libtorrent_apple_session_t *session,
+    const libtorrent_apple_session_configuration_t *configuration,
+    libtorrent_apple_error_t *error_out
+) {
+    clear_error(error_out);
+
+    if (session == NULL) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (configuration == NULL) {
+        return fail(error_out, -1, "configuration must not be null");
+    }
+
+    session->configuration = *configuration;
+    push_alert(session, 1018, "placeholder_session_configuration_applied", "Placeholder session configuration applied.", "");
     return true;
 }
 
@@ -540,6 +579,40 @@ bool libtorrent_apple_session_get_torrent_status(
     copy_string(status_out->state, sizeof(status_out->state), torrent->paused ? "paused" : "downloading");
     copy_string(status_out->name, sizeof(status_out->name), torrent->name);
     copy_string(status_out->error_message, sizeof(status_out->error_message), "");
+    return true;
+}
+
+bool libtorrent_apple_session_get_stats(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_session_stats_t *stats_out,
+    libtorrent_apple_error_t *error_out
+) {
+    placeholder_torrent_t *torrent = NULL;
+
+    clear_error(error_out);
+
+    if (stats_out == NULL) {
+        return fail(error_out, -1, "stats_out must not be null");
+    }
+
+    memset(stats_out, 0, sizeof(*stats_out));
+
+    if (session == NULL) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    torrent = session->torrents;
+    while (torrent != NULL) {
+        stats_out->download_rate += torrent->download_rate;
+        stats_out->upload_rate += torrent->upload_rate;
+        stats_out->total_connections += torrent->num_peers;
+        stats_out->total_peers += torrent->num_peers;
+        stats_out->total_seeds += torrent->num_seeds;
+        torrent = torrent->next;
+    }
+
+    stats_out->dht_enabled = session->configuration.enable_dht;
+    stats_out->dht_node_count = session->configuration.enable_dht ? 64 : 0;
     return true;
 }
 
@@ -1023,7 +1096,7 @@ bool libtorrent_apple_torrent_tracker_count(
         return fail(error_out, -1, "torrent not found");
     }
 
-    *count_out = 1;
+    *count_out = torrent->tracker_count;
     return true;
 }
 
@@ -1094,19 +1167,32 @@ bool libtorrent_apple_torrent_replace_trackers(
         return fail(error_out, -1, "trackers must not be null when tracker_count is greater than zero");
     }
 
-    if (tracker_count > 4) {
-        return fail(error_out, -1, "placeholder tracker capacity is 4");
-    }
-
     torrent = find_torrent(session, info_hash_hex, NULL);
     if (torrent == NULL) {
         return fail(error_out, -1, "torrent not found");
     }
 
-    torrent->tracker_count = tracker_count;
+    torrent->tracker_count = 0;
     for (size_t index = 0; index < tracker_count; index += 1) {
-        copy_string(torrent->tracker_urls[index], sizeof(torrent->tracker_urls[index]), trackers[index].url);
-        torrent->tracker_tiers[index] = trackers[index].tier;
+        if (trackers[index].url[0] == '\0') {
+            return fail(error_out, -1, "tracker url must not be empty");
+        }
+
+        if (tracker_exists(torrent, trackers[index].url)) {
+            continue;
+        }
+
+        if (torrent->tracker_count >= PLACEHOLDER_TRACKER_CAPACITY) {
+            return fail(error_out, -1, "placeholder tracker capacity reached");
+        }
+
+        copy_string(
+            torrent->tracker_urls[torrent->tracker_count],
+            sizeof(torrent->tracker_urls[torrent->tracker_count]),
+            trackers[index].url
+        );
+        torrent->tracker_tiers[torrent->tracker_count] = trackers[index].tier;
+        torrent->tracker_count += 1;
     }
 
     push_alert(session, 1016, "placeholder_trackers_replaced", "Placeholder trackers replaced.", torrent->info_hash);
@@ -1119,12 +1205,31 @@ bool libtorrent_apple_torrent_add_tracker(
     const libtorrent_apple_torrent_tracker_update_t *tracker,
     libtorrent_apple_error_t *error_out
 ) {
+    return libtorrent_apple_torrent_add_trackers(
+        session,
+        info_hash_hex,
+        tracker,
+        tracker != NULL ? 1 : 0,
+        true,
+        error_out
+    );
+}
+
+bool libtorrent_apple_torrent_add_trackers(
+    libtorrent_apple_session_t *session,
+    const char *info_hash_hex,
+    const libtorrent_apple_torrent_tracker_update_t *trackers,
+    size_t tracker_count,
+    bool force_reannounce,
+    libtorrent_apple_error_t *error_out
+) {
     placeholder_torrent_t *torrent = NULL;
+    size_t added_count = 0;
 
     clear_error(error_out);
 
-    if (tracker == NULL) {
-        return fail(error_out, -1, "tracker must not be null");
+    if (trackers == NULL && tracker_count > 0) {
+        return fail(error_out, -1, "trackers must not be null when tracker_count is greater than zero");
     }
 
     torrent = find_torrent(session, info_hash_hex, NULL);
@@ -1132,19 +1237,33 @@ bool libtorrent_apple_torrent_add_tracker(
         return fail(error_out, -1, "torrent not found");
     }
 
-    if (torrent->tracker_count >= 4) {
-        return fail(error_out, -1, "placeholder tracker capacity is 4");
+    for (size_t index = 0; index < tracker_count; index += 1) {
+        if (trackers[index].url[0] == '\0') {
+            return fail(error_out, -1, "tracker url must not be empty");
+        }
+
+        if (tracker_exists(torrent, trackers[index].url)) {
+            continue;
+        }
+
+        if (torrent->tracker_count >= PLACEHOLDER_TRACKER_CAPACITY) {
+            return fail(error_out, -1, "placeholder tracker capacity reached");
+        }
+
+        copy_string(
+            torrent->tracker_urls[torrent->tracker_count],
+            sizeof(torrent->tracker_urls[torrent->tracker_count]),
+            trackers[index].url
+        );
+        torrent->tracker_tiers[torrent->tracker_count] = trackers[index].tier;
+        torrent->tracker_count += 1;
+        added_count += 1;
     }
 
-    copy_string(
-        torrent->tracker_urls[torrent->tracker_count],
-        sizeof(torrent->tracker_urls[torrent->tracker_count]),
-        tracker->url
-    );
-    torrent->tracker_tiers[torrent->tracker_count] = tracker->tier;
-    torrent->tracker_count += 1;
+    if (added_count > 0 || force_reannounce) {
+        push_alert(session, 1017, "placeholder_tracker_added", "Placeholder tracker(s) added.", torrent->info_hash);
+    }
 
-    push_alert(session, 1017, "placeholder_tracker_added", "Placeholder tracker added.", torrent->info_hash);
     return true;
 }
 

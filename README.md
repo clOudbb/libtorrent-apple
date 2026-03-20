@@ -118,6 +118,22 @@ Task {
 }
 ```
 
+### 5. Apply animeko parity strategy and peer filters
+
+```swift
+var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
+configuration.shareRatioLimit = 200
+configuration.applyProfile(.animekoParityV1)
+
+let parityDownloader = TorrentDownloader(configuration: configuration)
+try await parityDownloader.start()
+try await parityDownloader.applyProfile(.animekoParityV1)
+try await parityDownloader.setPeerFilters(
+    blockedCIDRs: ["10.0.0.0/8"],
+    allowedCIDRs: []
+)
+```
+
 ### 5. File priorities, trackers, and torrent control
 
 ```swift
@@ -199,6 +215,26 @@ Validate local binary mode:
 ```bash
 ./scripts/validate-swift-package.sh local-binary
 ```
+
+Run the local benchmark demo (v0.2.0 P0-0):
+
+```bash
+cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
+# edit /tmp/benchmark-sources.txt and replace with your magnet/.torrent sources
+
+./scripts/run-benchmark-demo.sh source \
+  --profile animeko-parity \
+  --sources-file /tmp/benchmark-sources.txt \
+  --duration 300 \
+  --interval 1
+```
+
+The demo writes:
+
+- `session_samples.csv`
+- `torrent_samples.csv`
+- `summary.json`
+- `samples.json`
 
 ## Build Against a Different libtorrent Version
 

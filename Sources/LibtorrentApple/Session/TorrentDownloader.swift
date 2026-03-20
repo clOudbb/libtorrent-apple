@@ -44,12 +44,40 @@ public actor TorrentDownloader {
         try await sessionStorage.start()
     }
 
+    public func applyConfiguration(_ configuration: SessionConfiguration) async throws {
+        try await sessionStorage.applyConfiguration(configuration)
+        self.configuration = configuration
+    }
+
+    public func applyProfile(_ profile: SessionProfile) async throws {
+        let updated = configuration.applyingProfile(profile)
+        try await applyConfiguration(updated)
+    }
+
+    public func setPeerFilters(
+        blockedCIDRs: [String],
+        allowedCIDRs: [String] = []
+    ) async throws {
+        var updated = configuration
+        updated.peerBlockedCIDRs = blockedCIDRs
+        updated.peerAllowedCIDRs = allowedCIDRs
+        try await applyConfiguration(updated)
+    }
+
+    public func clearPeerFilters() async throws {
+        try await setPeerFilters(blockedCIDRs: [], allowedCIDRs: [])
+    }
+
     public func stop() async {
         await sessionStorage.stop()
     }
 
     public func totalStats() async -> TorrentDownloaderStats {
         await sessionStorage.totalStats()
+    }
+
+    public func sessionDiagnostics() async throws -> TorrentSessionDiagnostics {
+        try await sessionStorage.sessionDiagnostics()
     }
 
     public func statsUpdates(
