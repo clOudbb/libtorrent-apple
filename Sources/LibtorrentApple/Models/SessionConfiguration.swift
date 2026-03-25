@@ -74,6 +74,17 @@ public struct SessionEncryptionConfiguration: Sendable, Hashable, Codable {
 }
 
 public struct SessionConfiguration: Sendable, Hashable, Codable {
+    // Runtime apply behavior (when session is running, via TorrentSession.applyConfiguration):
+    // - Requires session recreation if changed:
+    //   downloadDirectory, listenInterfaces, enableDistributedHashTable, enableLocalPeerDiscovery,
+    //   enableUPnP, enableNATPMP, alertMask, userAgent, handshakeClientVersion.
+    // - Can be updated at runtime:
+    //   peerFingerprint, dhtBootstrapNodes, shareRatioLimit, peerBlockedCIDRs, peerAllowedCIDRs,
+    //   upload/download rate limits, connection/active limits, send buffer tuning, autoSequentialDownload,
+    //   proxy settings, encryption settings.
+    // Notes:
+    // - shareRatioLimit is applied only when >= 0.
+    // - Several integer limits are clamped to non-negative values during runtime apply.
     public var downloadDirectory: URL?
     public var listenInterfaces: [String]
     public var enableDistributedHashTable: Bool
