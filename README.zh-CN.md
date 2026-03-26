@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.2")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.3")
 ```
 
 导入模块：
@@ -212,7 +212,7 @@ print(try await restoredHandle.status().name)
   适合发版前在本地先做“与生产等价”的行为验证，再上传 Release 产物。
 - `source`（不推荐用于生产）：编译仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），适合 API 开发和快速迭代。
   当前问题是：这条链路与最终发布的 binary 产物不是同一套打包/链接路径，source 模式结果不能作为下游最终吞吐验收依据。
-  一个已发生过的漂移案例：早期版本里 binary 模式的 Swift 包装层曾直接禁掉 `applyConfiguration`，而 native bridge 实际已支持运行时限速更新；该问题已修复并包含在 `0.2.2`，但也说明 source/binary 一致性必须在 binary 模式下验收。
+  一个已发生过的漂移案例：早期版本里 binary 模式的 Swift 包装层曾直接禁掉 `applyConfiguration`，而 native bridge 实际已支持运行时限速更新；该问题已修复并包含在 `0.2.3`，但也说明 source/binary 一致性必须在 binary 模式下验收。
 
 验证 source mode：
 
@@ -226,7 +226,7 @@ print(try await restoredHandle.status().name)
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.2
+./scripts/make-xcframework.sh 0.2.3
 ```
 
 验证 local-binary mode：
@@ -241,7 +241,7 @@ print(try await restoredHandle.status().name)
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-运行本地 benchmark demo（v0.2.2 P0-0）：
+运行本地 benchmark demo（v0.2.3 P0-0）：
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -274,7 +274,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.2
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.3
 ```
 
 ## Release 与 SwiftPM 的关系
