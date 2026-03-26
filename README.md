@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.1")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.2")
 ```
 
 Then import:
@@ -212,7 +212,7 @@ Mode details:
   Use this for pre-release verification when you need production-equivalent behavior before uploading Release assets.
 - `source` (not recommended for production): compiles the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast iteration.
   Current caveat: this path is a different packaging/linking route from shipped binary artifacts, so source-mode results cannot be used as final throughput acceptance for downstream apps.
-  A concrete drift example from earlier versions: binary-mode `applyConfiguration` was gated off in Swift wrapper even though the native bridge already supported runtime rate-limit apply; this was fixed in `0.2.1`, but it shows why source and binary parity must be validated on binary mode.
+  A concrete drift example from earlier versions: binary-mode `applyConfiguration` was gated off in Swift wrapper even though the native bridge already supported runtime rate-limit apply; this is already fixed and included in `0.2.2`, but it shows why source and binary parity must be validated on binary mode.
 
 Validate source mode:
 
@@ -226,7 +226,7 @@ Build the Apple frameworks:
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.1
+./scripts/make-xcframework.sh 0.2.2
 ```
 
 Validate local binary mode:
@@ -241,7 +241,7 @@ Validate remote binary mode:
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-Run the local benchmark demo (v0.2.1 P0-0):
+Run the local benchmark demo (v0.2.2 P0-0):
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -275,7 +275,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.1
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.2
 ```
 
 ## Release Model
