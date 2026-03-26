@@ -953,6 +953,10 @@ bool write_torrent_status(lt::torrent_handle const &handle, libtorrent_apple_tor
     status_out->upload_rate = status.upload_rate;
     status_out->num_peers = status.num_peers;
     status_out->num_seeds = status.num_seeds;
+    status_out->num_complete = status.num_complete;
+    status_out->num_incomplete = status.num_incomplete;
+    status_out->list_seeds = status.list_seeds;
+    status_out->list_peers = status.list_peers;
     status_out->total_download = status.total_download;
     status_out->total_upload = status.total_upload;
     status_out->total_size = status.total_wanted;

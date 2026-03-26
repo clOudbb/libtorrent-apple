@@ -192,8 +192,17 @@ This version already includes:
 - native resume data export and import
 - downloader-level stats streams and piece update streams
 - proxy, encryption, queue, cache, and send-buffer session settings
+- qB-style swarm counters via torrent metrics (`peerCount/seedCount` + `peerTotalCount/seedTotalCount`)
 
 ## Build and Validate Locally
+
+### Package Modes
+
+- `source`: uses the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast validation; not the production throughput path.
+- `local-binary`: uses a locally built XCFramework at `Artifacts/release/LibtorrentAppleBinary.xcframework`.
+- `remote-binary`: uses the GitHub Release binary artifact configured in `PackageSupport/BinaryArtifact.env` (default when config is present).
+
+For production behavior parity and BT throughput validation, use `local-binary` or `remote-binary`.
 
 Validate source mode:
 

@@ -92,6 +92,10 @@ typedef struct {
     int32_t upload_rate;
     int32_t num_peers;
     int32_t num_seeds;
+    int32_t num_complete;
+    int32_t num_incomplete;
+    int32_t list_seeds;
+    int32_t list_peers;
     int64_t total_download;
     int64_t total_upload;
     int64_t total_size;

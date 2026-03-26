@@ -2,12 +2,6 @@ import Foundation
 import Testing
 @testable import LibtorrentApple
 
-#if canImport(LibtorrentAppleBridge)
-private let supportsExtendedRuntimeBridgeAPIs = true
-#else
-private let supportsExtendedRuntimeBridgeAPIs = false
-#endif
-
 @Test
 func torrentSessionLifecycleAndStatusFlow() async throws {
     let session = TorrentSession()
@@ -32,6 +26,14 @@ func torrentSessionLifecycleAndStatusFlow() async throws {
 
     let fetched = try await session.torrentStatus(for: added.id)
     #expect(fetched.id == added.id)
+    #expect(fetched.metrics.peerListCount >= 0)
+    #expect(fetched.metrics.seedListCount >= 0)
+    if let peerTotal = fetched.metrics.peerTotalCount {
+        #expect(peerTotal >= 0)
+    }
+    if let seedTotal = fetched.metrics.seedTotalCount {
+        #expect(seedTotal >= 0)
+    }
 
     try await session.removeTorrent(id: added.id)
     let all = await session.allTorrentStatuses()
@@ -235,7 +237,7 @@ func torrentHandleExposesFileAndPieceControls() async throws {
             TorrentTrackerUpdate(url: "https://tracker-2.example/announce", tier: 1),
             TorrentTrackerUpdate(url: "https://tracker-3.example/announce", tier: 2),
         ],
-        forceReannounce: supportsExtendedRuntimeBridgeAPIs ? false : true
+        forceReannounce: false
     )
     let addedTrackers = try await handle.addTracker(TorrentTrackerUpdate(url: "https://tracker-4.example/announce", tier: 3))
     let streamingSnapshot = try await controller.prepareForStreaming(
@@ -283,13 +285,6 @@ func runtimeApplyConfigurationAndSessionDiagnosticsWork() async throws {
     appliedConfiguration.shareRatioLimit = 300
     appliedConfiguration.peerBlockedCIDRs = ["10.0.0.0/8"]
     appliedConfiguration.peerAllowedCIDRs = ["10.10.0.0/16"]
-
-    if !supportsExtendedRuntimeBridgeAPIs {
-        await #expect(throws: LibtorrentAppleError.self) {
-            try await session.applyConfiguration(appliedConfiguration)
-        }
-        return
-    }
 
     try await session.applyConfiguration(appliedConfiguration)
     let diagnostics = try await session.sessionDiagnostics()

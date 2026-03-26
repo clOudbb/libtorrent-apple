@@ -192,8 +192,17 @@ print(try await restoredHandle.status().name)
 - native resume data 导出和导入
 - downloader 级 stats stream 和 piece update stream
 - 代理、加密、队列、缓存、send buffer 等 session 配置
+- qB 风格 swarm 计数能力（`peerCount/seedCount` + `peerTotalCount/seedTotalCount`）
 
 ## 本地构建与验证
+
+### Package Mode 说明
+
+- `source`：使用仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），用于 API 开发与快速验证；不是生产吞吐路径。
+- `local-binary`：使用本地构建产物 `Artifacts/release/LibtorrentAppleBinary.xcframework`。
+- `remote-binary`：使用 `PackageSupport/BinaryArtifact.env` 配置的 GitHub Release 二进制产物（配置存在时默认模式）。
+
+若要对齐生产行为并验证 BT 吞吐，请使用 `local-binary` 或 `remote-binary`。
 
 验证 source mode：
 

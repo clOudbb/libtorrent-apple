@@ -572,6 +572,10 @@ bool libtorrent_apple_session_get_torrent_status(
     status_out->upload_rate = torrent->upload_rate;
     status_out->num_peers = torrent->num_peers;
     status_out->num_seeds = torrent->num_seeds;
+    status_out->num_complete = torrent->num_seeds + 24;
+    status_out->num_incomplete = torrent->num_peers + 40;
+    status_out->list_seeds = torrent->num_seeds;
+    status_out->list_peers = torrent->num_peers;
     status_out->total_download = torrent->total_download;
     status_out->total_upload = torrent->total_upload;
     status_out->total_size = 1024 * 1024;

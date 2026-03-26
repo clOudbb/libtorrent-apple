@@ -108,7 +108,7 @@ enum BridgeRuntime {
         var nativeConfiguration = makeNativeSessionConfiguration(from: configuration)
         var nativeError = libtorrent_apple_error_t()
 
-        #if canImport(LibtorrentAppleBridge)
+        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         guard libtorrent_apple_session_apply_configuration(session, &nativeConfiguration, &nativeError) else {
             throw error(from: nativeError, fallbackMessage: "Failed to apply session configuration.")
         }
@@ -263,7 +263,7 @@ enum BridgeRuntime {
     }
 
     static func sessionStats(session: BridgeSessionHandle) throws -> BridgeNativeSessionStats {
-        #if canImport(LibtorrentAppleBridge)
+        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         var nativeStats = libtorrent_apple_session_stats_t()
         var nativeError = libtorrent_apple_error_t()
 
@@ -715,7 +715,7 @@ enum BridgeRuntime {
 
         var nativeError = libtorrent_apple_error_t()
 
-        #if canImport(LibtorrentAppleBridge)
+        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         let succeeded = id.rawValue.withCString { infoHash in
             nativeTrackers.withUnsafeMutableBufferPointer { buffer in
                 libtorrent_apple_torrent_add_trackers(
@@ -905,7 +905,18 @@ enum BridgeRuntime {
     }
 
     static func metrics(from nativeStatus: libtorrent_apple_torrent_status_t) -> TorrentMetrics {
-        TorrentMetrics(
+        let listPeerCount = Int(nativeStatus.list_peers)
+        let listSeedCount = Int(nativeStatus.list_seeds)
+        let peerTotal = resolvedSwarmTotal(
+            primary: Int(nativeStatus.num_incomplete),
+            fallbackEstimate: listPeerCount
+        )
+        let seedTotal = resolvedSwarmTotal(
+            primary: Int(nativeStatus.num_complete),
+            fallbackEstimate: listSeedCount
+        )
+
+        return TorrentMetrics(
             progress: nativeStatus.progress,
             downloadedBytes: nativeStatus.total_download,
             uploadedBytes: nativeStatus.total_upload,
@@ -913,7 +924,11 @@ enum BridgeRuntime {
             downloadRateBytesPerSecond: Int64(nativeStatus.download_rate),
             uploadRateBytesPerSecond: Int64(nativeStatus.upload_rate),
             peerCount: Int(nativeStatus.num_peers),
-            seedCount: Int(nativeStatus.num_seeds)
+            seedCount: Int(nativeStatus.num_seeds),
+            peerTotalCount: peerTotal,
+            seedTotalCount: seedTotal,
+            peerListCount: max(listPeerCount, 0),
+            seedListCount: max(listSeedCount, 0)
         )
     }
 
@@ -930,6 +945,16 @@ enum BridgeRuntime {
 
     static func priority(from nativePriority: Int32) -> TorrentDownloadPriority {
         TorrentDownloadPriority(rawValue: UInt8(clamping: nativePriority)) ?? .default
+    }
+
+    private static func resolvedSwarmTotal(primary: Int, fallbackEstimate: Int) -> Int? {
+        if primary >= 0 {
+            return primary
+        }
+        if fallbackEstimate > 0 {
+            return fallbackEstimate
+        }
+        return nil
     }
 
     private static func perform(
@@ -982,7 +1007,7 @@ enum BridgeRuntime {
         encodeCString(configuration.handshakeClientVersion ?? "", into: &nativeConfiguration.handshake_client_version)
         encodeCString(configuration.listenInterfaces.joined(separator: ","), into: &nativeConfiguration.listen_interfaces)
 
-        #if canImport(LibtorrentAppleBridge)
+        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         nativeConfiguration.share_ratio_limit = Int32(clamping: configuration.shareRatioLimit)
         encodeCString(configuration.peerFingerprint ?? "", into: &nativeConfiguration.peer_fingerprint)
         encodeCString(configuration.dhtBootstrapNodes.joined(separator: ","), into: &nativeConfiguration.dht_bootstrap_nodes)
