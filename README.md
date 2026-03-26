@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.4")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.1")
 ```
 
 Then import:
@@ -196,13 +196,23 @@ This version already includes:
 
 ## Build and Validate Locally
 
-### Package Modes
+### Package Modes and Recommendation
 
-- `source`: uses the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast validation; not the production throughput path.
-- `local-binary`: uses a locally built XCFramework at `Artifacts/release/LibtorrentAppleBinary.xcframework`.
-- `remote-binary`: uses the GitHub Release binary artifact configured in `PackageSupport/BinaryArtifact.env` (default when config is present).
+Recommended dependency mode for downstream apps (highest priority first):
 
-For production behavior parity and BT throughput validation, use `local-binary` or `remote-binary`.
+1. `remote-binary` (recommended)
+2. `local-binary`
+3. `source` (not recommended for production)
+
+Mode details:
+
+- `remote-binary` (recommended): SwiftPM downloads the Release XCFramework declared by `PackageSupport/BinaryArtifact.env`.
+  This is the closest path to real downstream integration, with no local C/C++ toolchain cost and minimal CI time.
+- `local-binary`: loads `Artifacts/release/LibtorrentAppleBinary.xcframework` built by this repo's scripts.
+  Use this for pre-release verification when you need production-equivalent behavior before uploading Release assets.
+- `source` (not recommended for production): compiles the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast iteration.
+  Current caveat: this path is a different packaging/linking route from shipped binary artifacts, so source-mode results cannot be used as final throughput acceptance for downstream apps.
+  A concrete drift example from earlier versions: binary-mode `applyConfiguration` was gated off in Swift wrapper even though the native bridge already supported runtime rate-limit apply; this was fixed in `0.2.1`, but it shows why source and binary parity must be validated on binary mode.
 
 Validate source mode:
 
@@ -216,7 +226,7 @@ Build the Apple frameworks:
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.1.4
+./scripts/make-xcframework.sh 0.2.1
 ```
 
 Validate local binary mode:
@@ -225,13 +235,19 @@ Validate local binary mode:
 ./scripts/validate-swift-package.sh local-binary
 ```
 
-Run the local benchmark demo (v0.2.0 P0-0):
+Validate remote binary mode:
+
+```bash
+./scripts/validate-swift-package.sh remote-binary
+```
+
+Run the local benchmark demo (v0.2.1 P0-0):
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # edit /tmp/benchmark-sources.txt and replace with your magnet/.torrent sources
 
-./scripts/run-benchmark-demo.sh source \
+./scripts/run-benchmark-demo.sh local-binary \
   --profile animeko-parity \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
@@ -259,7 +275,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.1.4
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.1
 ```
 
 ## Release Model

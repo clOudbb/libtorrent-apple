@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.1.4")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.1")
 ```
 
 导入模块：
@@ -196,13 +196,23 @@ print(try await restoredHandle.status().name)
 
 ## 本地构建与验证
 
-### Package Mode 说明
+### Package Mode 与推荐顺序
 
-- `source`：使用仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），用于 API 开发与快速验证；不是生产吞吐路径。
-- `local-binary`：使用本地构建产物 `Artifacts/release/LibtorrentAppleBinary.xcframework`。
-- `remote-binary`：使用 `PackageSupport/BinaryArtifact.env` 配置的 GitHub Release 二进制产物（配置存在时默认模式）。
+下游 App 依赖时，推荐优先级如下：
 
-若要对齐生产行为并验证 BT 吞吐，请使用 `local-binary` 或 `remote-binary`。
+1. `remote-binary`（最推荐）
+2. `local-binary`
+3. `source`（不推荐用于生产）
+
+各模式说明：
+
+- `remote-binary`（推荐）：SwiftPM 直接下载 `PackageSupport/BinaryArtifact.env` 指向的 GitHub Release XCFramework。
+  这是最接近真实下游集成的路径，不需要本地 C/C++ 构建，CI 成本最低。
+- `local-binary`：加载本仓库脚本产出的 `Artifacts/release/LibtorrentAppleBinary.xcframework`。
+  适合发版前在本地先做“与生产等价”的行为验证，再上传 Release 产物。
+- `source`（不推荐用于生产）：编译仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），适合 API 开发和快速迭代。
+  当前问题是：这条链路与最终发布的 binary 产物不是同一套打包/链接路径，source 模式结果不能作为下游最终吞吐验收依据。
+  一个已发生过的漂移案例：早期版本里 binary 模式的 Swift 包装层曾直接禁掉 `applyConfiguration`，而 native bridge 实际已支持运行时限速更新；该问题已在 `0.2.1` 修复，但也说明 source/binary 一致性必须在 binary 模式下验收。
 
 验证 source mode：
 
@@ -216,7 +226,7 @@ print(try await restoredHandle.status().name)
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.1.4
+./scripts/make-xcframework.sh 0.2.1
 ```
 
 验证 local-binary mode：
@@ -225,13 +235,19 @@ print(try await restoredHandle.status().name)
 ./scripts/validate-swift-package.sh local-binary
 ```
 
-运行本地 benchmark demo（v0.2.0 P0-0）：
+验证 remote-binary mode：
+
+```bash
+./scripts/validate-swift-package.sh remote-binary
+```
+
+运行本地 benchmark demo（v0.2.1 P0-0）：
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # 编辑 /tmp/benchmark-sources.txt，替换成你的磁力链接/.torrent 输入
 
-./scripts/run-benchmark-demo.sh source \
+./scripts/run-benchmark-demo.sh local-binary \
   --profile animeko-parity \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
@@ -258,7 +274,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.1.4
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.1
 ```
 
 ## Release 与 SwiftPM 的关系
