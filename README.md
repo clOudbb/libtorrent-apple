@@ -118,23 +118,90 @@ Task {
 }
 ```
 
-### 5. Apply animeko parity strategy and peer filters
+### 5. Apply Throughput Profiles and Peer Filters
 
 ```swift
 var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
 configuration.shareRatioLimit = 200
-configuration.applyProfile(.animekoParityV1)
+configuration.applyProfile(.animekoParityV2)
 
 let parityDownloader = TorrentDownloader(configuration: configuration)
 try await parityDownloader.start()
-try await parityDownloader.applyProfile(.animekoParityV1)
+try await parityDownloader.applyProfile(.qBittorrentParityV1)
 try await parityDownloader.setPeerFilters(
     blockedCIDRs: ["10.0.0.0/8"],
     allowedCIDRs: []
 )
 ```
 
-### 5. File priorities, trackers, and torrent control
+Available profiles:
+
+- `.baseline`: keep default behavior
+- `.animekoParityV1`: legacy animeko parity profile
+- `.animekoParityV2`: upgraded animeko/anitorrent parity profile
+- `.qBittorrentParityV1`: qBittorrent-style throughput profile
+- `.beastV1`: aggressive extreme-throughput profile (higher CPU/network/battery cost)
+
+### 6. Deferred Apply and Recovery Reannounce Hooks
+
+```swift
+let session = await parityDownloader.session()
+var tuned = await session.configuration
+tuned.connectionSpeed = 45
+tuned.peerTurnover = 4
+tuned.announceToAllTiers = true
+
+await session.scheduleConfigurationApply(
+    tuned,
+    debounceInterval: 0.2
+)
+
+// Triggered by downstream app callbacks when network path changes or system wakes.
+_ = try await session.handleNetworkPathChanged()
+_ = try await session.handleSystemWakeupDetected()
+```
+
+### 7. Runtime Transport Behavior Controls (uTP/TCP)
+
+```swift
+// Immediate apply
+try await parityDownloader.setTransportBehavior(.tcpOnly)
+
+// Debounced apply (for high-frequency toggles)
+await parityDownloader.scheduleTransportBehaviorApply(.preferTCP, debounceInterval: 0.2)
+_ = await parityDownloader.flushDeferredConfigurationApply()
+```
+
+Behavior mapping:
+
+- `.balanced`: enable TCP + uTP, `mixedModeAlgorithm = .peerProportional`
+- `.preferTCP`: enable TCP + uTP, `mixedModeAlgorithm = .preferTCP`
+- `.tcpOnly`: enable TCP, disable uTP
+- `.utpOnly`: disable TCP, enable uTP
+
+### 8. Throughput Optimizer (P0-1/P0-2)
+
+```swift
+await parityDownloader.startThroughputOptimizer(
+    policy: .default
+)
+
+// Optional: check status
+let enabled = await parityDownloader.isThroughputOptimizerEnabled()
+print("optimizer enabled:", enabled)
+
+// Stop and restore baseline configuration
+await parityDownloader.stopThroughputOptimizer(restoreBaseline: true)
+```
+
+What it does:
+
+- low-speed/zero-speed window detection
+- batch reannounce for stalled downloads
+- temporary throughput boost (`connectionSpeed`, `torrentConnectBoost`, request queues, peer turnover)
+- auto-restore baseline after stable recovery windows
+
+### 9. File priorities, trackers, and torrent control
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -153,7 +220,7 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 6. Save and restore
+### 10. Save and restore
 
 Repository-level JSON snapshot:
 
@@ -193,6 +260,8 @@ This version already includes:
 - downloader-level stats streams and piece update streams
 - proxy, encryption, queue, cache, and send-buffer session settings
 - qB-style swarm counters via torrent metrics (`peerCount/seedCount` + `peerTotalCount/seedTotalCount`)
+- deferred session configuration apply and batch reannounce recovery hooks
+- runtime uTP/TCP transport behavior control hooks
 
 ## Build and Validate Locally
 
@@ -219,6 +288,14 @@ Validate source mode:
 ```bash
 ./scripts/validate-swift-package.sh source
 ```
+
+Validate all package modes in one command:
+
+```bash
+./scripts/validate-swift-package.sh all
+```
+
+Note: `remote-binary` mode requires the published XCFramework to match current source headers/API.
 
 Build the Apple frameworks:
 
@@ -248,7 +325,7 @@ cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # edit /tmp/benchmark-sources.txt and replace with your magnet/.torrent sources
 
 ./scripts/run-benchmark-demo.sh local-binary \
-  --profile animeko-parity \
+  --profile animeko-parity-v2 \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
   --interval 1
@@ -260,6 +337,41 @@ The demo writes:
 - `torrent_samples.csv`
 - `summary.json`
 - `samples.json`
+
+Run a fair A/B parity gate with enforced same sources, same trackers, and same time window:
+
+```bash
+./scripts/benchmark-parity-gate.sh \
+  --mode local-binary \
+  --reference-profile animeko-parity-v2 \
+  --candidate-profile qbittorrent-parity-v1 \
+  --threshold-percent 15 \
+  --duration 300 \
+  --interval 1 \
+  -- \
+  --sources-file /tmp/benchmark-sources.txt \
+  --tracker-file /tmp/benchmark-trackers.txt
+```
+
+Gate outputs:
+
+- `reference-*/summary.json`
+- `candidate-*/summary.json`
+- `gate_report.json` (pass/fail + throughput gap + attribution hints)
+
+Run a simplified one-shot same-condition comparison (reference only, no gate threshold):
+
+```bash
+./scripts/benchmark-once-compare.sh \
+  --mode local-binary \
+  --reference-profile animeko-parity-v2 \
+  --candidate-profile qbittorrent-parity-v1 \
+  --duration 120 \
+  --interval 1 \
+  -- \
+  --sources-file /tmp/benchmark-sources.txt \
+  --tracker-file /tmp/benchmark-trackers.txt
+```
 
 ## Build Against a Different libtorrent Version
 

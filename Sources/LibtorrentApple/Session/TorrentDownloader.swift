@@ -54,6 +54,23 @@ public actor TorrentDownloader {
         try await applyConfiguration(updated)
     }
 
+    public func scheduleConfigurationApply(
+        _ configuration: SessionConfiguration,
+        debounceInterval: TimeInterval = 0.2
+    ) async {
+        self.configuration = configuration
+        await sessionStorage.scheduleConfigurationApply(configuration, debounceInterval: debounceInterval)
+    }
+
+    @discardableResult
+    public func flushDeferredConfigurationApply() async -> Bool {
+        let applied = await sessionStorage.flushDeferredConfigurationApply()
+        if applied {
+            self.configuration = await sessionStorage.configuration
+        }
+        return applied
+    }
+
     public func setPeerFilters(
         blockedCIDRs: [String],
         allowedCIDRs: [String] = []
@@ -68,8 +85,55 @@ public actor TorrentDownloader {
         try await setPeerFilters(blockedCIDRs: [], allowedCIDRs: [])
     }
 
+    public func setTransportBehavior(_ behavior: SessionTransportBehavior) async throws {
+        let updated = configuration.applyingTransportBehavior(behavior)
+        try await applyConfiguration(updated)
+    }
+
+    public func scheduleTransportBehaviorApply(
+        _ behavior: SessionTransportBehavior,
+        debounceInterval: TimeInterval = 0.2
+    ) async {
+        let updated = configuration.applyingTransportBehavior(behavior)
+        self.configuration = updated
+        await sessionStorage.scheduleConfigurationApply(updated, debounceInterval: debounceInterval)
+    }
+
+    public func startThroughputOptimizer(
+        policy: SessionThroughputOptimizerPolicy = .default
+    ) async {
+        await sessionStorage.startThroughputOptimizer(policy: policy)
+    }
+
+    public func stopThroughputOptimizer(restoreBaseline: Bool = true) async {
+        await sessionStorage.stopThroughputOptimizer(restoreBaseline: restoreBaseline)
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func isThroughputOptimizerEnabled() async -> Bool {
+        await sessionStorage.isThroughputOptimizerEnabled()
+    }
+
     public func stop() async {
         await sessionStorage.stop()
+    }
+
+    @discardableResult
+    public func reannounceAllTorrents(
+        after seconds: Int = 0,
+        ignoreMinimumInterval: Bool = true
+    ) async throws -> Int {
+        try await sessionStorage.reannounceAllTorrents(after: seconds, ignoreMinimumInterval: ignoreMinimumInterval)
+    }
+
+    @discardableResult
+    public func handleNetworkPathChanged() async throws -> Int {
+        try await sessionStorage.handleNetworkPathChanged()
+    }
+
+    @discardableResult
+    public func handleSystemWakeupDetected() async throws -> Int {
+        try await sessionStorage.handleSystemWakeupDetected()
     }
 
     public func totalStats() async -> TorrentDownloaderStats {

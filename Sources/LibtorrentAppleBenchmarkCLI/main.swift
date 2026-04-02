@@ -9,58 +9,36 @@ private struct CLIError: Error, CustomStringConvertible {
 private enum BenchmarkProfile: String, CaseIterable, Codable {
     case baseline
     case animekoParity = "animeko-parity"
+    case animekoParityV1 = "animeko-parity-v1"
+    case animekoParityV2 = "animeko-parity-v2"
+    case qBittorrentParityV1 = "qbittorrent-parity-v1"
+    case beastV1 = "beast-v1"
 
-    var defaultConnectionsLimit: Int? {
+    var sessionProfile: SessionProfile {
         switch self {
         case .baseline:
-            return nil
-        case .animekoParity:
-            return 200
-        }
-    }
-
-    var defaultDHTBootstrapNodes: [String] {
-        switch self {
-        case .baseline:
-            return []
-        case .animekoParity:
-            return [
-                "router.utorrent.com:6881",
-                "router.bittorrent.com:6881",
-                "dht.transmissionbt.com:6881",
-                "router.bitcomet.com:6881",
-            ]
+            return .baseline
+        case .animekoParity, .animekoParityV2:
+            return .animekoParityV2
+        case .animekoParityV1:
+            return .animekoParityV1
+        case .qBittorrentParityV1:
+            return .qBittorrentParityV1
+        case .beastV1:
+            return .beastV1
         }
     }
 
     var defaultTrackerURLs: [String] {
-        switch self {
-        case .baseline:
-            return []
-        case .animekoParity:
-            return [
-                "udp://tracker1.itzmx.com:8080/announce",
-                "udp://moonburrow.club:6969/announce",
-                "udp://new-line.net:6969/announce",
-                "udp://opentracker.io:6969/announce",
-                "udp://tamas3.ynh.fr:6969/announce",
-                "udp://tracker.bittor.pw:1337/announce",
-                "udp://tracker.dump.cl:6969/announce",
-                "udp://tracker2.dler.org:80/announce",
-                "https://tracker.tamersunion.org:443/announce",
-                "udp://open.demonii.com:1337/announce",
-                "udp://open.stealth.si:80/announce",
-                "udp://tracker.torrent.eu.org:451/announce",
-                "udp://exodus.desync.com:6969/announce",
-                "udp://tracker.moeking.me:6969/announce",
-                "udp://tracker1.bt.moack.co.kr:80/announce",
-                "udp://tracker.tiny-vps.com:6969/announce",
-                "udp://bt1.archive.org:6969/announce",
-                "udp://tracker.opentrackr.org:1337/announce",
-                "http://tracker.opentrackr.org:1337/announce",
-                "https://tracker1.520.jp:443/announce",
-            ]
-        }
+        sessionProfile.defaultTrackerPreset
+    }
+
+    var defaultConnectionsLimit: Int? {
+        sessionProfile.defaultConnectionsLimit
+    }
+
+    var defaultDHTBootstrapNodes: [String] {
+        sessionProfile.defaultDHTBootstrapNodes
     }
 }
 
@@ -101,6 +79,11 @@ private struct TorrentSample: Codable {
     let uploadRateBytesPerSecond: Int64
     let peers: Int
     let seeds: Int
+    let peerTotal: Int?
+    let seedTotal: Int?
+    let peerListCount: Int
+    let seedListCount: Int
+    let shareRatio: Double?
     let totalDownloadBytes: Int64
     let totalUploadBytes: Int64
 }
@@ -111,6 +94,32 @@ private struct ConfigurationSnapshot: Codable {
     let handshakeClientVersion: String?
     let peerFingerprint: String?
     let connectionsLimit: Int
+    let announceToAllTrackers: Bool?
+    let announceToAllTiers: Bool?
+    let peerTurnover: Int?
+    let peerTurnoverCutoff: Int?
+    let peerTurnoverInterval: Int?
+    let connectionSpeed: Int
+    let torrentConnectBoost: Int
+    let mixedModeAlgorithm: String?
+    let chokingAlgorithm: String?
+    let seedChokingAlgorithm: String?
+    let maxOutgoingRequestQueueSize: Int
+    let maxAllowedIncomingRequestQueueSize: Int
+    let enablePieceExtentAffinity: Bool?
+    let suggestMode: String?
+    let aioThreads: Int
+    let filePoolSize: Int
+    let maxConcurrentHTTPAnnounces: Int?
+    let stopTrackerTimeout: Int?
+    let includeIPOverheadInRateLimit: Bool?
+    let allowMultipleConnectionsPerIP: Bool?
+    let validateHTTPSTrackers: Bool?
+    let enableSSRFMitigation: Bool?
+    let enableOutgoingTCP: Bool?
+    let enableIncomingTCP: Bool?
+    let enableOutgoingUTP: Bool?
+    let enableIncomingUTP: Bool?
     let dhtBootstrapNodes: [String]
     let trackerPresetCount: Int
 }
@@ -142,6 +151,9 @@ private struct BenchmarkSummary: Codable {
     let averageConnections: Double
     let averagePeers: Double
     let averageSeeds: Double
+    let connectionStabilityStdDev: Double
+    let firstEffectiveDownloadSeconds: Double?
+    let averageShareRatio: Double?
     let averageDHTNodeCount: Double
     let sessionSampleCount: Int
     let torrentSampleCount: Int
@@ -180,7 +192,7 @@ private struct CLIOptions {
           --sources-file <path>      Load sources from file. Repeatable.
 
         Optional:
-          --profile <name>           baseline | animeko-parity (default: baseline)
+          --profile <name>           baseline | animeko-parity | animeko-parity-v1 | animeko-parity-v2 | qbittorrent-parity-v1 | beast-v1 (default: baseline)
           --duration <seconds>       Sampling window in seconds (default: 300)
           --interval <seconds>       Sampling interval in seconds (default: 1)
           --output-dir <path>        Output directory for CSV/JSON logs
@@ -428,6 +440,9 @@ private enum LibtorrentAppleBenchmarkCLI {
         let downloadDirectory = rootDirectory.appendingPathComponent("Downloads", isDirectory: true)
 
         var configuration = SessionConfiguration(downloadDirectory: downloadDirectory)
+        configuration.applyProfile(options.profile.sessionProfile)
+        configuration.downloadDirectory = downloadDirectory
+
         if let connectionsLimit = options.connectionsLimitOverride ?? options.profile.defaultConnectionsLimit {
             configuration.connectionsLimit = connectionsLimit
         }
@@ -442,6 +457,8 @@ private enum LibtorrentAppleBenchmarkCLI {
         }
         configuration.handshakeClientVersion = options.handshakeClientVersionOverride ?? configuration.handshakeClientVersion
         configuration.peerFingerprint = options.peerFingerprintOverride ?? configuration.peerFingerprint
+        // Benchmark CLI injects trackers explicitly to produce deterministic injection reports.
+        configuration.trackerPresetURLs = []
 
         let profileTrackers = options.disableProfileTrackers ? [] : options.profile.defaultTrackerURLs
         let injectedTrackers = orderedUnique(profileTrackers + options.trackerURLs)
@@ -455,6 +472,32 @@ private enum LibtorrentAppleBenchmarkCLI {
             handshakeClientVersion: configuration.handshakeClientVersion,
             peerFingerprint: configuration.peerFingerprint,
             connectionsLimit: configuration.connectionsLimit,
+            announceToAllTrackers: configuration.announceToAllTrackers,
+            announceToAllTiers: configuration.announceToAllTiers,
+            peerTurnover: configuration.peerTurnover,
+            peerTurnoverCutoff: configuration.peerTurnoverCutoff,
+            peerTurnoverInterval: configuration.peerTurnoverInterval,
+            connectionSpeed: configuration.connectionSpeed,
+            torrentConnectBoost: configuration.torrentConnectBoost,
+            mixedModeAlgorithm: configuration.mixedModeAlgorithm.map { String(describing: $0) },
+            chokingAlgorithm: configuration.chokingAlgorithm.map { String(describing: $0) },
+            seedChokingAlgorithm: configuration.seedChokingAlgorithm.map { String(describing: $0) },
+            maxOutgoingRequestQueueSize: configuration.maxOutgoingRequestQueueSize,
+            maxAllowedIncomingRequestQueueSize: configuration.maxAllowedIncomingRequestQueueSize,
+            enablePieceExtentAffinity: configuration.enablePieceExtentAffinity,
+            suggestMode: configuration.suggestMode.map { String(describing: $0) },
+            aioThreads: configuration.aioThreads,
+            filePoolSize: configuration.filePoolSize,
+            maxConcurrentHTTPAnnounces: configuration.maxConcurrentHTTPAnnounces,
+            stopTrackerTimeout: configuration.stopTrackerTimeout,
+            includeIPOverheadInRateLimit: configuration.includeIPOverheadInRateLimit,
+            allowMultipleConnectionsPerIP: configuration.allowMultipleConnectionsPerIP,
+            validateHTTPSTrackers: configuration.validateHTTPSTrackers,
+            enableSSRFMitigation: configuration.enableSSRFMitigation,
+            enableOutgoingTCP: configuration.enableOutgoingTCP,
+            enableIncomingTCP: configuration.enableIncomingTCP,
+            enableOutgoingUTP: configuration.enableOutgoingUTP,
+            enableIncomingUTP: configuration.enableIncomingUTP,
             dhtBootstrapNodes: configuration.dhtBootstrapNodes,
             trackerPresetCount: injectedTrackers.count
         )
@@ -588,6 +631,11 @@ private enum LibtorrentAppleBenchmarkCLI {
                             uploadRateBytesPerSecond: status.metrics.uploadRateBytesPerSecond,
                             peers: status.metrics.peerCount,
                             seeds: status.metrics.seedCount,
+                            peerTotal: status.metrics.peerTotalCount,
+                            seedTotal: status.metrics.seedTotalCount,
+                            peerListCount: status.metrics.peerListCount,
+                            seedListCount: status.metrics.seedListCount,
+                            shareRatio: status.metrics.shareRatio,
                             totalDownloadBytes: status.metrics.downloadedBytes,
                             totalUploadBytes: status.metrics.uploadedBytes
                         )
@@ -602,6 +650,15 @@ private enum LibtorrentAppleBenchmarkCLI {
             }
 
             let endedAt = Date()
+            let firstEffectiveDownloadSeconds: Double? = {
+                guard let firstActive = sessionSamples.first(where: { $0.downloadRateBytesPerSecond > 0 }),
+                      let firstDate = isoFormatter.date(from: firstActive.timestamp)
+                else {
+                    return nil
+                }
+                return firstDate.timeIntervalSince(startedAt)
+            }()
+            let averageShareRatio = averageOptional(torrentSamples.map(\.shareRatio))
             let summary = BenchmarkSummary(
                 startedAt: isoFormatter.string(from: startedAt),
                 endedAt: isoFormatter.string(from: endedAt),
@@ -620,6 +677,9 @@ private enum LibtorrentAppleBenchmarkCLI {
                 averageConnections: average(sessionSamples.map(\.totalConnections)),
                 averagePeers: average(sessionSamples.map(\.totalPeers)),
                 averageSeeds: average(sessionSamples.map(\.totalSeeds)),
+                connectionStabilityStdDev: standardDeviation(sessionSamples.map(\.totalConnections)),
+                firstEffectiveDownloadSeconds: firstEffectiveDownloadSeconds,
+                averageShareRatio: averageShareRatio,
                 averageDHTNodeCount: average(sessionSamples.map(\.dhtNodeCount)),
                 sessionSampleCount: sessionSamples.count,
                 torrentSampleCount: torrentSamples.count,
@@ -696,12 +756,12 @@ private func writeSessionCSV(samples: [SessionSample], outputDirectory: URL) thr
 
 private func writeTorrentCSV(samples: [TorrentSample], outputDirectory: URL) throws {
     var lines: [String] = [
-        "timestamp,torrent_id,progress,download_rate_Bps,upload_rate_Bps,peers,seeds,total_download_B,total_upload_B",
+        "timestamp,torrent_id,progress,download_rate_Bps,upload_rate_Bps,peers_connected,peers_total,seeds_connected,seeds_total,list_peers,list_seeds,ratio,total_download_B,total_upload_B",
     ]
 
     for sample in samples {
         lines.append(
-            "\(sample.timestamp),\(sample.torrentID),\(sample.progress),\(sample.downloadRateBytesPerSecond),\(sample.uploadRateBytesPerSecond),\(sample.peers),\(sample.seeds),\(sample.totalDownloadBytes),\(sample.totalUploadBytes)"
+            "\(sample.timestamp),\(sample.torrentID),\(sample.progress),\(sample.downloadRateBytesPerSecond),\(sample.uploadRateBytesPerSecond),\(sample.peers),\(csvOptionalInt(sample.peerTotal)),\(sample.seeds),\(csvOptionalInt(sample.seedTotal)),\(sample.peerListCount),\(sample.seedListCount),\(csvOptionalDouble(sample.shareRatio)),\(sample.totalDownloadBytes),\(sample.totalUploadBytes)"
         )
     }
 
@@ -754,6 +814,41 @@ private func average<T: BinaryInteger>(_ values: [T]) -> Double {
         partial + Double(value)
     }
     return sum / Double(values.count)
+}
+
+private func averageOptional(_ values: [Double?]) -> Double? {
+    let resolved = values.compactMap { $0 }
+    guard !resolved.isEmpty else {
+        return nil
+    }
+    let sum = resolved.reduce(0, +)
+    return sum / Double(resolved.count)
+}
+
+private func standardDeviation<T: BinaryInteger>(_ values: [T]) -> Double {
+    guard values.count > 1 else {
+        return 0
+    }
+    let mean = average(values)
+    let variance = values.reduce(0.0) { partial, value in
+        let delta = Double(value) - mean
+        return partial + (delta * delta)
+    } / Double(values.count)
+    return sqrt(variance)
+}
+
+private func csvOptionalInt(_ value: Int?) -> String {
+    guard let value else {
+        return ""
+    }
+    return String(value)
+}
+
+private func csvOptionalDouble(_ value: Double?) -> String {
+    guard let value else {
+        return ""
+    }
+    return String(value)
 }
 
 private func percentile(_ values: [Int64], percentile: Double) -> Int64 {

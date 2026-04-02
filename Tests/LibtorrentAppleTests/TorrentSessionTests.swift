@@ -279,7 +279,12 @@ func runtimeApplyConfigurationAndSessionDiagnosticsWork() async throws {
     appliedConfiguration.uploadRateLimitBytesPerSecond = 256 * 1024
     appliedConfiguration.downloadRateLimitBytesPerSecond = 2 * 1024 * 1024
     appliedConfiguration.connectionsLimit = 300
-    appliedConfiguration.activeTorrentLimit = 12
+    appliedConfiguration.activeDownloadsLimit = -1
+    appliedConfiguration.activeSeedsLimit = -1
+    appliedConfiguration.activeTorrentLimit = -1
+    appliedConfiguration.connectionSpeed = 40
+    appliedConfiguration.torrentConnectBoost = 80
+    appliedConfiguration.maxOutgoingRequestQueueSize = 600
     appliedConfiguration.autoSequentialDownload = true
     appliedConfiguration.peerFingerprint = "-OK0161-"
     appliedConfiguration.shareRatioLimit = 300
@@ -292,7 +297,12 @@ func runtimeApplyConfigurationAndSessionDiagnosticsWork() async throws {
     #expect(await session.configuration.uploadRateLimitBytesPerSecond == appliedConfiguration.uploadRateLimitBytesPerSecond)
     #expect(await session.configuration.downloadRateLimitBytesPerSecond == appliedConfiguration.downloadRateLimitBytesPerSecond)
     #expect(await session.configuration.connectionsLimit == appliedConfiguration.connectionsLimit)
+    #expect(await session.configuration.activeDownloadsLimit == appliedConfiguration.activeDownloadsLimit)
+    #expect(await session.configuration.activeSeedsLimit == appliedConfiguration.activeSeedsLimit)
     #expect(await session.configuration.activeTorrentLimit == appliedConfiguration.activeTorrentLimit)
+    #expect(await session.configuration.connectionSpeed == appliedConfiguration.connectionSpeed)
+    #expect(await session.configuration.torrentConnectBoost == appliedConfiguration.torrentConnectBoost)
+    #expect(await session.configuration.maxOutgoingRequestQueueSize == appliedConfiguration.maxOutgoingRequestQueueSize)
     #expect(await session.configuration.autoSequentialDownload == appliedConfiguration.autoSequentialDownload)
     #expect(await session.configuration.peerFingerprint == appliedConfiguration.peerFingerprint)
     #expect(await session.configuration.shareRatioLimit == appliedConfiguration.shareRatioLimit)
@@ -306,16 +316,184 @@ func runtimeApplyConfigurationAndSessionDiagnosticsWork() async throws {
 }
 
 @Test
-func animekoParityProfileAppliesExpectedDefaults() async throws {
-    var configuration = SessionConfiguration()
-    configuration.connectionsLimit = 0
-    configuration.dhtBootstrapNodes = []
+func sessionProfilesApplyExpectedDefaults() async throws {
+    var v1 = SessionConfiguration()
+    v1.applyProfile(.animekoParityV1)
+    #expect(v1.connectionsLimit == 200)
+    #expect(v1.dhtBootstrapNodes == SessionProfile.animekoParityV1.defaultDHTBootstrapNodes)
+    #expect(v1.trackerPresetURLs.count == SessionProfile.animekoParityV1.defaultTrackerPreset.count)
 
-    configuration.applyProfile(.animekoParityV1)
+    var v2 = SessionConfiguration()
+    v2.applyProfile(.animekoParityV2)
+    #expect(v2.connectionsLimit == 1000)
+    #expect(v2.maxOutgoingRequestQueueSize == 2000)
+    #expect(v2.maxAllowedIncomingRequestQueueSize == 2000)
+    #expect(v2.aioThreads == 8)
+    #expect(v2.activeTorrentLimit == -1)
+    #expect(v2.enableUPnP)
+    #expect(v2.enableNATPMP)
 
-    #expect(configuration.connectionsLimit == 200)
-    #expect(configuration.dhtBootstrapNodes == SessionProfile.animekoParityV1.defaultDHTBootstrapNodes)
-    #expect(SessionProfile.animekoParityV1.defaultTrackerPreset.count == 20)
+    var qb = SessionConfiguration()
+    qb.applyProfile(.qBittorrentParityV1)
+    #expect(qb.connectionsLimit == 500)
+    #expect(qb.announceToAllTrackers == false)
+    #expect(qb.announceToAllTiers == true)
+    #expect(qb.peerTurnover == 4)
+    #expect(qb.peerTurnoverCutoff == 90)
+    #expect(qb.peerTurnoverInterval == 300)
+    #expect(qb.connectionSpeed == 30)
+    #expect(qb.torrentConnectBoost == 50)
+    #expect(qb.mixedModeAlgorithm == .preferTCP)
+    #expect(qb.chokingAlgorithm == .fixedSlots)
+    #expect(qb.seedChokingAlgorithm == .fastestUpload)
+    #expect(qb.enablePieceExtentAffinity == false)
+    #expect(qb.suggestMode == .noPieceSuggestions)
+    #expect(qb.maxConcurrentHTTPAnnounces == 50)
+    #expect(qb.stopTrackerTimeout == 2)
+    #expect(qb.includeIPOverheadInRateLimit == false)
+    #expect(qb.allowMultipleConnectionsPerIP == false)
+    #expect(qb.validateHTTPSTrackers == true)
+    #expect(qb.enableSSRFMitigation == true)
+    #expect(qb.enableOutgoingTCP == true)
+    #expect(qb.enableIncomingTCP == true)
+    #expect(qb.enableOutgoingUTP == true)
+    #expect(qb.enableIncomingUTP == true)
+    #expect(qb.trackerPresetURLs.isEmpty)
+
+    var beast = SessionConfiguration()
+    beast.applyProfile(.beastV1)
+    #expect(beast.connectionsLimit == 2000)
+    #expect(beast.announceToAllTrackers == true)
+    #expect(beast.announceToAllTiers == true)
+    #expect(beast.maxOutgoingRequestQueueSize == 4000)
+    #expect(beast.maxAllowedIncomingRequestQueueSize == 4000)
+    #expect(beast.aioThreads == 16)
+    #expect(beast.mixedModeAlgorithm == .peerProportional)
+    #expect(beast.chokingAlgorithm == .rateBased)
+    #expect(beast.enablePieceExtentAffinity == true)
+    #expect(beast.suggestMode == .suggestReadCache)
+    #expect(beast.maxConcurrentHTTPAnnounces == 100)
+    #expect(beast.allowMultipleConnectionsPerIP == true)
+    #expect(beast.enableOutgoingTCP == true)
+    #expect(beast.enableIncomingTCP == true)
+    #expect(beast.enableOutgoingUTP == true)
+    #expect(beast.enableIncomingUTP == true)
+    #expect(beast.maxQueuedDiskBytes == 64 * 1024 * 1024)
+    #expect(beast.trackerPresetURLs.count == SessionProfile.beastV1.defaultTrackerPreset.count)
+}
+
+@Test
+func transportBehaviorControlsWork() async throws {
+    let rootDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LibtorrentAppleTransportBehavior-\(UUID().uuidString)", isDirectory: true)
+
+    let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+    try await session.start()
+
+    try await session.setTransportBehavior(.tcpOnly)
+    #expect(await session.configuration.enableOutgoingTCP == true)
+    #expect(await session.configuration.enableIncomingTCP == true)
+    #expect(await session.configuration.enableOutgoingUTP == false)
+    #expect(await session.configuration.enableIncomingUTP == false)
+    #expect(await session.configuration.mixedModeAlgorithm == .preferTCP)
+
+    await session.scheduleTransportBehaviorApply(.utpOnly, debounceInterval: 0.01)
+    let applied = await session.flushDeferredConfigurationApply()
+    #expect(applied)
+    #expect(await session.configuration.enableOutgoingTCP == false)
+    #expect(await session.configuration.enableIncomingTCP == false)
+    #expect(await session.configuration.enableOutgoingUTP == true)
+    #expect(await session.configuration.enableIncomingUTP == true)
+    #expect(await session.configuration.mixedModeAlgorithm == .peerProportional)
+
+    await session.stop()
+}
+
+@Test
+func throughputOptimizerBoostAndRestoreWork() async throws {
+    let rootDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LibtorrentAppleThroughputOptimizer-\(UUID().uuidString)", isDirectory: true)
+    let torrentFileURL = rootDirectory.appendingPathComponent("optimizer.torrent")
+
+    try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+    try makeEncodedTorrentData(fileName: "optimizer.mkv").write(to: torrentFileURL, options: .atomic)
+
+    let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+    try await session.start()
+    _ = try await session.addTorrent(from: .torrentFile(torrentFileURL, displayName: "Optimizer"))
+
+    var baseline = await session.configuration
+    baseline.connectionSpeed = 5
+    baseline.torrentConnectBoost = 10
+    baseline.maxOutgoingRequestQueueSize = 100
+    baseline.maxAllowedIncomingRequestQueueSize = 60
+    try await session.applyConfiguration(baseline)
+
+    let policy = SessionThroughputOptimizerPolicy(
+        sampleIntervalSeconds: 0.01,
+        lowSpeedThresholdBytesPerSecond: .max,
+        recoverySpeedThresholdBytesPerSecond: Int64.max,
+        consecutiveLowSpeedWindowsForBoost: 1,
+        consecutiveZeroSpeedWindowsForReannounce: 10,
+        stableRecoveryWindowsForRestore: 100,
+        cooldownSeconds: 0,
+        boostedConnectionSpeed: 55,
+        boostedTorrentConnectBoost: 90,
+        boostedMaxOutgoingRequestQueueSize: 700,
+        boostedMaxAllowedIncomingRequestQueueSize: 320,
+        boostedPeerTurnover: 6,
+        boostedPeerTurnoverCutoff: 86,
+        boostedPeerTurnoverInterval: 90
+    )
+
+    await session.startThroughputOptimizer(policy: policy)
+    try await Task.sleep(nanoseconds: 120_000_000)
+
+    #expect(await session.isThroughputOptimizerEnabled())
+    #expect(await session.configuration.connectionSpeed >= 55)
+    #expect(await session.configuration.torrentConnectBoost >= 90)
+    #expect(await session.configuration.maxOutgoingRequestQueueSize >= 700)
+    #expect(await session.configuration.maxAllowedIncomingRequestQueueSize >= 320)
+
+    await session.stopThroughputOptimizer()
+    #expect(!(await session.isThroughputOptimizerEnabled()))
+    #expect(await session.configuration.connectionSpeed == baseline.connectionSpeed)
+    #expect(await session.configuration.torrentConnectBoost == baseline.torrentConnectBoost)
+    #expect(await session.configuration.maxOutgoingRequestQueueSize == baseline.maxOutgoingRequestQueueSize)
+    #expect(await session.configuration.maxAllowedIncomingRequestQueueSize == baseline.maxAllowedIncomingRequestQueueSize)
+
+    await session.stop()
+}
+
+@Test
+func deferredApplyAndBatchReannounceHooksWork() async throws {
+    let rootDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LibtorrentAppleDeferredApply-\(UUID().uuidString)", isDirectory: true)
+    let torrentFileURL = rootDirectory.appendingPathComponent("episode.torrent")
+
+    try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+    try makeEncodedTorrentData(fileName: "episode-03.mkv").write(to: torrentFileURL, options: .atomic)
+
+    let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+    try await session.start()
+    _ = try await session.addTorrent(from: .torrentFile(torrentFileURL, displayName: "Episode 03"))
+
+    var deferredConfiguration = await session.configuration
+    deferredConfiguration.connectionSpeed = 45
+    deferredConfiguration.announceToAllTiers = true
+    await session.scheduleConfigurationApply(deferredConfiguration, debounceInterval: 0.01)
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    #expect(await session.configuration.connectionSpeed == 45)
+    #expect(await session.configuration.announceToAllTiers == true)
+
+    let networkReannounceCount = try await session.handleNetworkPathChanged()
+    let wakeupReannounceCount = try await session.handleSystemWakeupDetected()
+
+    #expect(networkReannounceCount == 1)
+    #expect(wakeupReannounceCount == 1)
+
+    await session.stop()
 }
 
 @Test

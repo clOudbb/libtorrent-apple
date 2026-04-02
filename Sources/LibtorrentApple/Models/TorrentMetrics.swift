@@ -41,4 +41,11 @@ public struct TorrentMetrics: Sendable, Hashable, Codable {
     }
 
     public static let empty = TorrentMetrics()
+
+    public var shareRatio: Double? {
+        guard downloadedBytes > 0 else {
+            return nil
+        }
+        return Double(uploadedBytes) / Double(downloadedBytes)
+    }
 }

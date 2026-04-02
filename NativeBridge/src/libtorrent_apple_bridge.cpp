@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <new>
@@ -514,11 +515,12 @@ bool apply_peer_filters(
     return true;
 }
 
-bool set_non_negative_int_setting(
+bool set_int_setting(
     lt::settings_pack *settings,
     int key,
     int32_t value,
-    bool runtime_mode
+    bool runtime_mode,
+    bool allow_negative_one
 )
 {
     if (settings == nullptr) {
@@ -526,11 +528,88 @@ bool set_non_negative_int_setting(
     }
 
     if (runtime_mode) {
-        settings->set_int(key, std::max(value, 0));
+        if (allow_negative_one) {
+            settings->set_int(key, std::max(value, static_cast<int32_t>(-1)));
+        } else {
+            settings->set_int(key, std::max(value, static_cast<int32_t>(0)));
+        }
+        return true;
+    }
+
+    if (allow_negative_one) {
+        if (value != 0) {
+            settings->set_int(key, std::max(value, static_cast<int32_t>(-1)));
+        }
     } else if (value > 0) {
         settings->set_int(key, value);
     }
 
+    return true;
+}
+
+bool set_optional_bool_setting(
+    lt::settings_pack *settings,
+    int key,
+    int32_t value
+)
+{
+    if (settings == nullptr) {
+        return false;
+    }
+
+    if (value < 0) {
+        return true;
+    }
+
+    settings->set_bool(key, value != 0);
+    return true;
+}
+
+bool set_optional_non_negative_int_setting(
+    lt::settings_pack *settings,
+    int key,
+    int32_t value
+)
+{
+    if (settings == nullptr) {
+        return false;
+    }
+
+    if (value < 0) {
+        return true;
+    }
+
+    settings->set_int(key, std::max(value, static_cast<int32_t>(0)));
+    return true;
+}
+
+bool set_optional_enum_int_setting(
+    lt::settings_pack *settings,
+    int key,
+    int32_t value,
+    std::function<int32_t(int32_t)> const &mapper,
+    char const *field_name,
+    libtorrent_apple_error_t *error_out
+)
+{
+    if (settings == nullptr) {
+        return false;
+    }
+
+    if (value < 0) {
+        return true;
+    }
+
+    int32_t const mapped = mapper(value);
+    if (mapped < 0) {
+        return fail(
+            error_out,
+            -1,
+            std::string("invalid value for ") + field_name
+        );
+    }
+
+    settings->set_int(key, mapped);
     return true;
 }
 
@@ -576,72 +655,372 @@ bool apply_configuration_to_settings(
         );
     }
 
-    set_non_negative_int_setting(&settings, lt::settings_pack::upload_rate_limit, configuration.upload_rate_limit, runtime_mode);
-    set_non_negative_int_setting(
+    set_int_setting(
+        &settings,
+        lt::settings_pack::upload_rate_limit,
+        configuration.upload_rate_limit,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
         &settings,
         lt::settings_pack::download_rate_limit,
         configuration.download_rate_limit,
-        runtime_mode
+        runtime_mode,
+        false
     );
     if (configuration.share_ratio_limit >= 0) {
         settings.set_int(lt::settings_pack::share_ratio_limit, configuration.share_ratio_limit);
     }
-    set_non_negative_int_setting(&settings, lt::settings_pack::connections_limit, configuration.connections_limit, runtime_mode);
-    set_non_negative_int_setting(
+    set_int_setting(
+        &settings,
+        lt::settings_pack::connections_limit,
+        configuration.connections_limit,
+        runtime_mode,
+        true
+    );
+    set_int_setting(
         &settings,
         lt::settings_pack::active_downloads,
         configuration.active_downloads_limit,
-        runtime_mode
+        runtime_mode,
+        true
     );
-    set_non_negative_int_setting(&settings, lt::settings_pack::active_seeds, configuration.active_seeds_limit, runtime_mode);
-    set_non_negative_int_setting(
+    set_int_setting(
+        &settings,
+        lt::settings_pack::active_seeds,
+        configuration.active_seeds_limit,
+        runtime_mode,
+        true
+    );
+    set_int_setting(
         &settings,
         lt::settings_pack::active_checking,
         configuration.active_checking_limit,
-        runtime_mode
+        runtime_mode,
+        true
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::active_dht_limit,
         configuration.active_dht_limit,
-        runtime_mode
+        runtime_mode,
+        true
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::active_tracker_limit,
         configuration.active_tracker_limit,
-        runtime_mode
+        runtime_mode,
+        true
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::active_lsd_limit,
         configuration.active_lsd_limit,
-        runtime_mode
+        runtime_mode,
+        true
     );
-    set_non_negative_int_setting(&settings, lt::settings_pack::active_limit, configuration.active_limit, runtime_mode);
-    set_non_negative_int_setting(
+    set_int_setting(
+        &settings,
+        lt::settings_pack::active_limit,
+        configuration.active_limit,
+        runtime_mode,
+        true
+    );
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::announce_to_all_trackers,
+            configuration.announce_to_all_trackers
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::announce_to_all_tiers,
+            configuration.announce_to_all_tiers
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_non_negative_int_setting(
+            &settings,
+            lt::settings_pack::peer_turnover,
+            configuration.peer_turnover
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_non_negative_int_setting(
+            &settings,
+            lt::settings_pack::peer_turnover_cutoff,
+            configuration.peer_turnover_cutoff
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_non_negative_int_setting(
+            &settings,
+            lt::settings_pack::peer_turnover_interval,
+            configuration.peer_turnover_interval
+        ))
+    {
+        return false;
+    }
+    set_int_setting(
+        &settings,
+        lt::settings_pack::connection_speed,
+        configuration.connection_speed,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
+        &settings,
+        lt::settings_pack::torrent_connect_boost,
+        configuration.torrent_connect_boost,
+        runtime_mode,
+        false
+    );
+    if (!set_optional_enum_int_setting(
+            &settings,
+            lt::settings_pack::mixed_mode_algorithm,
+            configuration.mixed_mode_algorithm,
+            [](int32_t const value) -> int32_t {
+                switch (value) {
+                case 0:
+                    return static_cast<int32_t>(lt::settings_pack::prefer_tcp);
+                case 1:
+                    return static_cast<int32_t>(lt::settings_pack::peer_proportional);
+                default:
+                    return -1;
+                }
+            },
+            "mixed_mode_algorithm",
+            error_out
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_enum_int_setting(
+            &settings,
+            lt::settings_pack::choking_algorithm,
+            configuration.choking_algorithm,
+            [](int32_t const value) -> int32_t {
+                switch (value) {
+                case 0:
+                    return static_cast<int32_t>(lt::settings_pack::fixed_slots_choker);
+                case 1:
+                    return static_cast<int32_t>(lt::settings_pack::rate_based_choker);
+                default:
+                    return -1;
+                }
+            },
+            "choking_algorithm",
+            error_out
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_enum_int_setting(
+            &settings,
+            lt::settings_pack::seed_choking_algorithm,
+            configuration.seed_choking_algorithm,
+            [](int32_t const value) -> int32_t {
+                switch (value) {
+                case 0:
+                    return static_cast<int32_t>(lt::settings_pack::round_robin);
+                case 1:
+                    return static_cast<int32_t>(lt::settings_pack::fastest_upload);
+                case 2:
+                    return static_cast<int32_t>(lt::settings_pack::anti_leech);
+                default:
+                    return -1;
+                }
+            },
+            "seed_choking_algorithm",
+            error_out
+        ))
+    {
+        return false;
+    }
+    set_int_setting(
+        &settings,
+        lt::settings_pack::max_out_request_queue,
+        configuration.max_out_request_queue,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
+        &settings,
+        lt::settings_pack::max_allowed_in_request_queue,
+        configuration.max_allowed_in_request_queue,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
+        &settings,
+        lt::settings_pack::whole_pieces_threshold,
+        configuration.whole_pieces_threshold,
+        runtime_mode,
+        false
+    );
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::piece_extent_affinity,
+            configuration.piece_extent_affinity
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_enum_int_setting(
+            &settings,
+            lt::settings_pack::suggest_mode,
+            configuration.suggest_mode,
+            [](int32_t const value) -> int32_t {
+                switch (value) {
+                case 0:
+                    return static_cast<int32_t>(lt::settings_pack::no_piece_suggestions);
+                case 1:
+                    return static_cast<int32_t>(lt::settings_pack::suggest_read_cache);
+                default:
+                    return -1;
+                }
+            },
+            "suggest_mode",
+            error_out
+        ))
+    {
+        return false;
+    }
+    set_int_setting(
+        &settings,
+        lt::settings_pack::aio_threads,
+        configuration.aio_threads,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
+        &settings,
+        lt::settings_pack::checking_mem_usage,
+        configuration.checking_mem_usage,
+        runtime_mode,
+        false
+    );
+    set_int_setting(
+        &settings,
+        lt::settings_pack::file_pool_size,
+        configuration.file_pool_size,
+        runtime_mode,
+        false
+    );
+    if (!set_optional_non_negative_int_setting(
+            &settings,
+            lt::settings_pack::max_concurrent_http_announces,
+            configuration.max_concurrent_http_announces
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_non_negative_int_setting(
+            &settings,
+            lt::settings_pack::stop_tracker_timeout,
+            configuration.stop_tracker_timeout
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::rate_limit_ip_overhead,
+            configuration.rate_limit_ip_overhead
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::allow_multiple_connections_per_ip,
+            configuration.allow_multiple_connections_per_ip
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::validate_https_trackers,
+            configuration.validate_https_trackers
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::ssrf_mitigation,
+            configuration.ssrf_mitigation
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::enable_outgoing_tcp,
+            configuration.enable_outgoing_tcp
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::enable_incoming_tcp,
+            configuration.enable_incoming_tcp
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::enable_outgoing_utp,
+            configuration.enable_outgoing_utp
+        ))
+    {
+        return false;
+    }
+    if (!set_optional_bool_setting(
+            &settings,
+            lt::settings_pack::enable_incoming_utp,
+            configuration.enable_incoming_utp
+        ))
+    {
+        return false;
+    }
+    set_int_setting(
         &settings,
         lt::settings_pack::max_queued_disk_bytes,
         configuration.max_queued_disk_bytes,
-        runtime_mode
+        runtime_mode,
+        false
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_low_watermark,
         configuration.send_buffer_low_watermark,
-        runtime_mode
+        runtime_mode,
+        false
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_watermark,
         configuration.send_buffer_watermark,
-        runtime_mode
+        runtime_mode,
+        false
     );
-    set_non_negative_int_setting(
+    set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_watermark_factor,
         configuration.send_buffer_watermark_factor,
-        runtime_mode
+        runtime_mode,
+        false
     );
 
     if (!runtime_mode) {
@@ -1069,6 +1448,26 @@ libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_
     libtorrent_apple_session_configuration_t configuration = {};
     configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
     configuration.share_ratio_limit = -1;
+    configuration.announce_to_all_trackers = -1;
+    configuration.announce_to_all_tiers = -1;
+    configuration.peer_turnover = -1;
+    configuration.peer_turnover_cutoff = -1;
+    configuration.peer_turnover_interval = -1;
+    configuration.mixed_mode_algorithm = -1;
+    configuration.choking_algorithm = -1;
+    configuration.seed_choking_algorithm = -1;
+    configuration.piece_extent_affinity = -1;
+    configuration.suggest_mode = -1;
+    configuration.max_concurrent_http_announces = -1;
+    configuration.stop_tracker_timeout = -1;
+    configuration.rate_limit_ip_overhead = -1;
+    configuration.allow_multiple_connections_per_ip = -1;
+    configuration.validate_https_trackers = -1;
+    configuration.ssrf_mitigation = -1;
+    configuration.enable_outgoing_tcp = -1;
+    configuration.enable_incoming_tcp = -1;
+    configuration.enable_outgoing_utp = -1;
+    configuration.enable_incoming_utp = -1;
     configuration.enable_dht = true;
     configuration.enable_lsd = true;
     configuration.enable_upnp = true;

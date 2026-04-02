@@ -16,12 +16,27 @@ private struct TrackedTorrent: Sendable, Hashable, Codable {
     var updatedAt: Date
 }
 
+private struct ThroughputOptimizerRuntimeState: Sendable {
+    var consecutiveLowSpeedWindows = 0
+    var consecutiveZeroSpeedWindows = 0
+    var stableRecoveryWindows = 0
+    var isBoosted = false
+    var lastActionAt: Date?
+}
+
 public actor TorrentSession {
     public private(set) var configuration: SessionConfiguration
     public private(set) var isRunning = false
 
     private var nativeSession: BridgeSessionHandle?
     private var alertPollTask: Task<Void, Never>?
+    private var deferredApplyTask: Task<Void, Never>?
+    private var deferredConfiguration: SessionConfiguration?
+    private var throughputOptimizerTask: Task<Void, Never>?
+    private var throughputOptimizerPolicy: SessionThroughputOptimizerPolicy?
+    private var throughputOptimizerBaseConfiguration: SessionConfiguration?
+    private var throughputOptimizerState = ThroughputOptimizerRuntimeState()
+    private var throughputOptimizerInternalApply = false
     private var torrents: [TorrentID: TrackedTorrent] = [:]
     private let alertStreamStorage: AsyncStream<TorrentAlert>
     private let alertContinuation: AsyncStream<TorrentAlert>.Continuation
@@ -167,6 +182,12 @@ public actor TorrentSession {
         do {
             try BridgeRuntime.applyConfiguration(session: session, configuration: configuration)
             self.configuration = configuration
+            if throughputOptimizerPolicy != nil,
+               !throughputOptimizerInternalApply,
+               !throughputOptimizerState.isBoosted
+            {
+                throughputOptimizerBaseConfiguration = configuration
+            }
             emitAlert(.nativeEvent, nativeEventName: "session_configuration_applied", message: "Applied session configuration.")
         } catch {
             throw translatedConfigurationError(error)
@@ -175,6 +196,54 @@ public actor TorrentSession {
 
     public func applyProfile(_ profile: SessionProfile) throws {
         try applyConfiguration(configuration.applyingProfile(profile))
+    }
+
+    public func scheduleConfigurationApply(
+        _ configuration: SessionConfiguration,
+        debounceInterval: TimeInterval = 0.2
+    ) {
+        deferredConfiguration = configuration
+        deferredApplyTask?.cancel()
+
+        deferredApplyTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await AsyncTiming.sleep(seconds: debounceInterval)
+            } catch {
+                return
+            }
+
+            await self.flushDeferredConfigurationApply()
+        }
+    }
+
+    @discardableResult
+    public func flushDeferredConfigurationApply() async -> Bool {
+        deferredApplyTask = nil
+        guard let pending = deferredConfiguration else {
+            return false
+        }
+        deferredConfiguration = nil
+
+        do {
+            try applyConfiguration(pending)
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_configuration_applied_deferred",
+                message: "Applied deferred session configuration."
+            )
+            return true
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_configuration_apply_deferred_failed",
+                message: "Deferred session configuration apply failed: \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     public func setPeerFilters(
@@ -191,11 +260,80 @@ public actor TorrentSession {
         try setPeerFilters(blockedCIDRs: [], allowedCIDRs: [])
     }
 
+    public func setTransportBehavior(_ behavior: SessionTransportBehavior) throws {
+        try applyConfiguration(configuration.applyingTransportBehavior(behavior))
+    }
+
+    public func scheduleTransportBehaviorApply(
+        _ behavior: SessionTransportBehavior,
+        debounceInterval: TimeInterval = 0.2
+    ) {
+        scheduleConfigurationApply(
+            configuration.applyingTransportBehavior(behavior),
+            debounceInterval: debounceInterval
+        )
+    }
+
+    public func startThroughputOptimizer(
+        policy: SessionThroughputOptimizerPolicy = .default
+    ) {
+        throughputOptimizerPolicy = policy
+        throughputOptimizerBaseConfiguration = configuration
+        throughputOptimizerState = ThroughputOptimizerRuntimeState()
+        startThroughputOptimizerTaskIfNeeded()
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_throughput_optimizer_started",
+            message: "Started throughput optimizer."
+        )
+    }
+
+    public func stopThroughputOptimizer(restoreBaseline: Bool = true) {
+        throughputOptimizerTask?.cancel()
+        throughputOptimizerTask = nil
+        let shouldRestore = restoreBaseline && throughputOptimizerState.isBoosted
+        let baseline = throughputOptimizerBaseConfiguration
+
+        throughputOptimizerPolicy = nil
+        throughputOptimizerState = ThroughputOptimizerRuntimeState()
+        throughputOptimizerBaseConfiguration = nil
+
+        if shouldRestore,
+           let baseline
+        {
+            do {
+                throughputOptimizerInternalApply = true
+                try applyConfiguration(baseline)
+            } catch {
+                emitAlert(
+                    .nativeEvent,
+                    nativeEventName: "session_throughput_optimizer_restore_failed",
+                    message: "Throughput optimizer restore failed: \(error.localizedDescription)"
+                )
+            }
+            throughputOptimizerInternalApply = false
+        }
+
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_throughput_optimizer_stopped",
+            message: "Stopped throughput optimizer."
+        )
+    }
+
+    public func isThroughputOptimizerEnabled() -> Bool {
+        throughputOptimizerPolicy != nil
+    }
+
     public func stop() {
         guard isRunning else {
             return
         }
 
+        stopThroughputOptimizer(restoreBaseline: false)
+        deferredApplyTask?.cancel()
+        deferredApplyTask = nil
+        deferredConfiguration = nil
         stopNativeAlertPolling()
         BridgeRuntime.destroySession(nativeSession)
         nativeSession = nil
@@ -227,6 +365,8 @@ public actor TorrentSession {
             addedAt: timestamp,
             updatedAt: timestamp
         )
+
+        applyTrackerPresetIfNeeded(session: session, torrentID: id)
 
         let status = try torrentStatus(for: id)
         emitAlert(.torrentAdded, torrentID: status.id, message: "Added torrent \(status.name).")
@@ -505,6 +645,64 @@ public actor TorrentSession {
         } catch {
             throw translatedTrackerError(error)
         }
+    }
+
+    @discardableResult
+    public func reannounceAllTorrents(
+        after seconds: Int = 0,
+        ignoreMinimumInterval: Bool = true
+    ) throws -> Int {
+        let session = try requireRunningSession()
+        let torrentIDs = torrents.keys.sorted(by: { $0.rawValue < $1.rawValue })
+
+        var succeeded = 0
+        for id in torrentIDs {
+            do {
+                try BridgeRuntime.forceReannounce(
+                    session: session,
+                    id: id,
+                    after: seconds,
+                    trackerIndex: nil,
+                    ignoreMinimumInterval: ignoreMinimumInterval
+                )
+                succeeded += 1
+            } catch {
+                emitAlert(
+                    .torrentTrackerWarning,
+                    torrentID: id,
+                    message: "Batch reannounce failed: \(error.localizedDescription)"
+                )
+            }
+        }
+
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_reannounce_all",
+            message: "Batch reannounce completed: \(succeeded)/\(torrentIDs.count) torrents."
+        )
+        return succeeded
+    }
+
+    @discardableResult
+    public func handleNetworkPathChanged() throws -> Int {
+        let succeeded = try reannounceAllTorrents(after: 0, ignoreMinimumInterval: true)
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_network_path_changed",
+            message: "Network path changed; triggered batch reannounce."
+        )
+        return succeeded
+    }
+
+    @discardableResult
+    public func handleSystemWakeupDetected() throws -> Int {
+        let succeeded = try reannounceAllTorrents(after: 0, ignoreMinimumInterval: true)
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_system_wakeup_detected",
+            message: "System wakeup detected; triggered batch reannounce."
+        )
+        return succeeded
     }
 
     @discardableResult
@@ -860,6 +1058,51 @@ public actor TorrentSession {
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("LibtorrentAppleDownloads", isDirectory: true)
     }
 
+    private func applyTrackerPresetIfNeeded(session: BridgeSessionHandle, torrentID: TorrentID) {
+        let updates = normalizedTrackerPresetUpdates()
+        guard !updates.isEmpty else {
+            return
+        }
+
+        do {
+            try BridgeRuntime.addTrackers(
+                session: session,
+                id: torrentID,
+                trackers: updates,
+                forceReannounce: true
+            )
+            emitAlert(
+                .torrentTrackerAdded,
+                torrentID: torrentID,
+                message: "Applied tracker preset (\(updates.count) trackers)."
+            )
+        } catch {
+            emitAlert(
+                .torrentTrackerWarning,
+                torrentID: torrentID,
+                message: "Tracker preset apply failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func normalizedTrackerPresetUpdates() -> [TorrentTrackerUpdate] {
+        var seen: Set<String> = []
+        var urls: [String] = []
+
+        for rawURL in configuration.trackerPresetURLs {
+            let normalizedURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedURL.isEmpty, !seen.contains(normalizedURL) else {
+                continue
+            }
+            seen.insert(normalizedURL)
+            urls.append(normalizedURL)
+        }
+
+        return urls.enumerated().map { index, url in
+            TorrentTrackerUpdate(url: url, tier: index)
+        }
+    }
+
     private func rehydrateTrackedTorrents() throws {
         guard !torrents.isEmpty, let nativeSession else {
             return
@@ -920,6 +1163,234 @@ public actor TorrentSession {
                 startNativeAlertPolling()
             }
             throw error
+        }
+    }
+
+    private func startThroughputOptimizerTaskIfNeeded() {
+        guard throughputOptimizerTask == nil else {
+            return
+        }
+
+        throughputOptimizerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+
+                let interval = await self.throughputOptimizerPolicy?.sampleIntervalSeconds ?? 2
+                do {
+                    try await AsyncTiming.sleep(seconds: interval)
+                } catch {
+                    return
+                }
+
+                await self.runThroughputOptimizerTick()
+            }
+        }
+    }
+
+    private func runThroughputOptimizerTick() {
+        guard isRunning, throughputOptimizerPolicy != nil else {
+            return
+        }
+
+        let statuses = allTorrentStatuses()
+        let downloading = statuses.filter { status in
+            status.state == .running && status.metrics.progress < 1
+        }
+
+        guard !downloading.isEmpty else {
+            throughputOptimizerState.consecutiveLowSpeedWindows = 0
+            throughputOptimizerState.consecutiveZeroSpeedWindows = 0
+            if throughputOptimizerState.isBoosted {
+                throughputOptimizerState.stableRecoveryWindows += 1
+                tryRestoreThroughputOptimizerBaseline(force: false)
+            }
+            return
+        }
+
+        let aggregateDownloadRate = downloading.reduce(0 as Int64) { partial, status in
+            partial + status.metrics.downloadRateBytesPerSecond
+        }
+
+        if aggregateDownloadRate == 0 {
+            throughputOptimizerState.consecutiveZeroSpeedWindows += 1
+        } else {
+            throughputOptimizerState.consecutiveZeroSpeedWindows = 0
+        }
+
+        if let lowSpeedThreshold = throughputOptimizerPolicy?.lowSpeedThresholdBytesPerSecond,
+           aggregateDownloadRate < lowSpeedThreshold
+        {
+            throughputOptimizerState.consecutiveLowSpeedWindows += 1
+        } else {
+            throughputOptimizerState.consecutiveLowSpeedWindows = 0
+        }
+
+        if let recoveryThreshold = throughputOptimizerPolicy?.recoverySpeedThresholdBytesPerSecond,
+           aggregateDownloadRate >= recoveryThreshold
+        {
+            throughputOptimizerState.stableRecoveryWindows += 1
+        } else {
+            throughputOptimizerState.stableRecoveryWindows = 0
+        }
+
+        guard canRunThroughputOptimizerAction() else {
+            return
+        }
+
+        var triggered = false
+        if let zeroWindows = throughputOptimizerPolicy?.consecutiveZeroSpeedWindowsForReannounce,
+           throughputOptimizerState.consecutiveZeroSpeedWindows >= zeroWindows
+        {
+            let reannounced = reannounceDownloadingTorrents(downloading)
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_throughput_optimizer_reannounce",
+                message: "Throughput optimizer reannounced \(reannounced) downloading torrents after zero-speed windows."
+            )
+            throughputOptimizerState.consecutiveZeroSpeedWindows = 0
+            triggered = true
+        }
+
+        if let lowWindows = throughputOptimizerPolicy?.consecutiveLowSpeedWindowsForBoost,
+           throughputOptimizerState.consecutiveLowSpeedWindows >= lowWindows
+        {
+            applyThroughputOptimizerBoost()
+            throughputOptimizerState.consecutiveLowSpeedWindows = 0
+            triggered = true
+        }
+
+        if triggered {
+            throughputOptimizerState.lastActionAt = Date()
+        }
+
+        tryRestoreThroughputOptimizerBaseline(force: false)
+    }
+
+    private func canRunThroughputOptimizerAction() -> Bool {
+        guard let cooldown = throughputOptimizerPolicy?.cooldownSeconds else {
+            return false
+        }
+
+        guard let lastActionAt = throughputOptimizerState.lastActionAt else {
+            return true
+        }
+
+        return Date().timeIntervalSince(lastActionAt) >= cooldown
+    }
+
+    private func reannounceDownloadingTorrents(_ statuses: [TorrentStatus]) -> Int {
+        guard let session = nativeSession else {
+            return 0
+        }
+
+        var succeeded = 0
+        for status in statuses {
+            do {
+                try BridgeRuntime.forceReannounce(
+                    session: session,
+                    id: status.id,
+                    after: 0,
+                    trackerIndex: nil,
+                    ignoreMinimumInterval: true
+                )
+                succeeded += 1
+            } catch {
+                emitAlert(
+                    .torrentTrackerWarning,
+                    torrentID: status.id,
+                    message: "Throughput optimizer reannounce failed: \(error.localizedDescription)"
+                )
+            }
+        }
+        return succeeded
+    }
+
+    private func applyThroughputOptimizerBoost() {
+        guard let policy = throughputOptimizerPolicy else {
+            return
+        }
+
+        var boosted = configuration
+        boosted.connectionSpeed = max(boosted.connectionSpeed, policy.boostedConnectionSpeed)
+        boosted.torrentConnectBoost = max(boosted.torrentConnectBoost, policy.boostedTorrentConnectBoost)
+        boosted.maxOutgoingRequestQueueSize = max(
+            boosted.maxOutgoingRequestQueueSize,
+            policy.boostedMaxOutgoingRequestQueueSize
+        )
+        boosted.maxAllowedIncomingRequestQueueSize = max(
+            boosted.maxAllowedIncomingRequestQueueSize,
+            policy.boostedMaxAllowedIncomingRequestQueueSize
+        )
+        boosted.peerTurnover = maxOptional(current: boosted.peerTurnover, proposed: policy.boostedPeerTurnover)
+        boosted.peerTurnoverCutoff = maxOptional(current: boosted.peerTurnoverCutoff, proposed: policy.boostedPeerTurnoverCutoff)
+        boosted.peerTurnoverInterval = maxOptional(
+            current: boosted.peerTurnoverInterval,
+            proposed: policy.boostedPeerTurnoverInterval
+        )
+
+        do {
+            throughputOptimizerInternalApply = true
+            try applyConfiguration(boosted)
+            throughputOptimizerState.isBoosted = true
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_throughput_optimizer_boost_applied",
+                message: "Applied throughput optimizer boost."
+            )
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_throughput_optimizer_boost_failed",
+                message: "Throughput optimizer boost failed: \(error.localizedDescription)"
+            )
+        }
+        throughputOptimizerInternalApply = false
+    }
+
+    private func tryRestoreThroughputOptimizerBaseline(force: Bool) {
+        guard throughputOptimizerState.isBoosted,
+              let policy = throughputOptimizerPolicy,
+              let baseline = throughputOptimizerBaseConfiguration
+        else {
+            return
+        }
+
+        if !force && throughputOptimizerState.stableRecoveryWindows < policy.stableRecoveryWindowsForRestore {
+            return
+        }
+
+        do {
+            throughputOptimizerInternalApply = true
+            try applyConfiguration(baseline)
+            throughputOptimizerState.isBoosted = false
+            throughputOptimizerState.stableRecoveryWindows = 0
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_throughput_optimizer_baseline_restored",
+                message: "Restored throughput optimizer baseline configuration."
+            )
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_throughput_optimizer_restore_failed",
+                message: "Throughput optimizer restore failed: \(error.localizedDescription)"
+            )
+        }
+        throughputOptimizerInternalApply = false
+    }
+
+    private func maxOptional(current: Int?, proposed: Int?) -> Int? {
+        switch (current, proposed) {
+        case let (.some(current), .some(proposed)):
+            return max(current, proposed)
+        case let (.some(current), .none):
+            return current
+        case let (.none, .some(proposed)):
+            return proposed
+        case (.none, .none):
+            return nil
         }
     }
 

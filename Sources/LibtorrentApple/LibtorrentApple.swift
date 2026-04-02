@@ -994,6 +994,34 @@ enum BridgeRuntime {
         nativeConfiguration.active_tracker_limit = Int32(clamping: configuration.activeTrackerLimit)
         nativeConfiguration.active_lsd_limit = Int32(clamping: configuration.activeLocalPeerDiscoveryLimit)
         nativeConfiguration.active_limit = Int32(clamping: configuration.activeTorrentLimit)
+        nativeConfiguration.announce_to_all_trackers = optionalNativeBool(configuration.announceToAllTrackers)
+        nativeConfiguration.announce_to_all_tiers = optionalNativeBool(configuration.announceToAllTiers)
+        nativeConfiguration.peer_turnover = optionalNativeInt(configuration.peerTurnover)
+        nativeConfiguration.peer_turnover_cutoff = optionalNativeInt(configuration.peerTurnoverCutoff)
+        nativeConfiguration.peer_turnover_interval = optionalNativeInt(configuration.peerTurnoverInterval)
+        nativeConfiguration.connection_speed = Int32(clamping: configuration.connectionSpeed)
+        nativeConfiguration.torrent_connect_boost = Int32(clamping: configuration.torrentConnectBoost)
+        nativeConfiguration.mixed_mode_algorithm = optionalNativeRaw(configuration.mixedModeAlgorithm)
+        nativeConfiguration.choking_algorithm = optionalNativeRaw(configuration.chokingAlgorithm)
+        nativeConfiguration.seed_choking_algorithm = optionalNativeRaw(configuration.seedChokingAlgorithm)
+        nativeConfiguration.max_out_request_queue = Int32(clamping: configuration.maxOutgoingRequestQueueSize)
+        nativeConfiguration.max_allowed_in_request_queue = Int32(clamping: configuration.maxAllowedIncomingRequestQueueSize)
+        nativeConfiguration.whole_pieces_threshold = Int32(clamping: configuration.wholePiecesThreshold)
+        nativeConfiguration.piece_extent_affinity = optionalNativeBool(configuration.enablePieceExtentAffinity)
+        nativeConfiguration.suggest_mode = optionalNativeRaw(configuration.suggestMode)
+        nativeConfiguration.aio_threads = Int32(clamping: configuration.aioThreads)
+        nativeConfiguration.checking_mem_usage = Int32(clamping: configuration.checkingMemoryUsage)
+        nativeConfiguration.file_pool_size = Int32(clamping: configuration.filePoolSize)
+        nativeConfiguration.max_concurrent_http_announces = optionalNativeInt(configuration.maxConcurrentHTTPAnnounces)
+        nativeConfiguration.stop_tracker_timeout = optionalNativeInt(configuration.stopTrackerTimeout)
+        nativeConfiguration.rate_limit_ip_overhead = optionalNativeBool(configuration.includeIPOverheadInRateLimit)
+        nativeConfiguration.allow_multiple_connections_per_ip = optionalNativeBool(configuration.allowMultipleConnectionsPerIP)
+        nativeConfiguration.validate_https_trackers = optionalNativeBool(configuration.validateHTTPSTrackers)
+        nativeConfiguration.ssrf_mitigation = optionalNativeBool(configuration.enableSSRFMitigation)
+        nativeConfiguration.enable_outgoing_tcp = optionalNativeBool(configuration.enableOutgoingTCP)
+        nativeConfiguration.enable_incoming_tcp = optionalNativeBool(configuration.enableIncomingTCP)
+        nativeConfiguration.enable_outgoing_utp = optionalNativeBool(configuration.enableOutgoingUTP)
+        nativeConfiguration.enable_incoming_utp = optionalNativeBool(configuration.enableIncomingUTP)
         nativeConfiguration.max_queued_disk_bytes = Int32(clamping: configuration.maxQueuedDiskBytes)
         nativeConfiguration.send_buffer_low_watermark = Int32(clamping: configuration.sendBufferLowWatermarkBytes)
         nativeConfiguration.send_buffer_watermark = Int32(clamping: configuration.sendBufferWatermarkBytes)
@@ -1043,6 +1071,24 @@ enum BridgeRuntime {
         }
 
         return 0
+    }
+
+    private static func optionalNativeBool(_ value: Bool?) -> Int32 {
+        guard let value else {
+            return -1
+        }
+        return value ? 1 : 0
+    }
+
+    private static func optionalNativeInt(_ value: Int?) -> Int32 {
+        guard let value else {
+            return -1
+        }
+        return Int32(clamping: value)
+    }
+
+    private static func optionalNativeRaw<T: RawRepresentable>(_ value: T?) -> Int32 where T.RawValue == Int32 {
+        value?.rawValue ?? -1
     }
 
     private static func encodeCString<T>(_ value: String, into field: inout T) {

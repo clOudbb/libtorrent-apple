@@ -73,6 +73,34 @@ public struct SessionEncryptionConfiguration: Sendable, Hashable, Codable {
     public static let `default` = SessionEncryptionConfiguration()
 }
 
+public enum SessionMixedModeAlgorithm: Int32, Sendable, Hashable, Codable {
+    case preferTCP = 0
+    case peerProportional = 1
+}
+
+public enum SessionChokingAlgorithm: Int32, Sendable, Hashable, Codable {
+    case fixedSlots = 0
+    case rateBased = 1
+}
+
+public enum SessionSeedChokingAlgorithm: Int32, Sendable, Hashable, Codable {
+    case roundRobin = 0
+    case fastestUpload = 1
+    case antiLeech = 2
+}
+
+public enum SessionSuggestMode: Int32, Sendable, Hashable, Codable {
+    case noPieceSuggestions = 0
+    case suggestReadCache = 1
+}
+
+public enum SessionTransportBehavior: String, Sendable, Hashable, Codable {
+    case balanced
+    case preferTCP
+    case tcpOnly
+    case utpOnly
+}
+
 public struct SessionConfiguration: Sendable, Hashable, Codable {
     // Runtime apply behavior (when session is running, via TorrentSession.applyConfiguration):
     // - Requires session recreation if changed:
@@ -80,11 +108,15 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
     //   enableUPnP, enableNATPMP, alertMask, userAgent, handshakeClientVersion.
     // - Can be updated at runtime:
     //   peerFingerprint, dhtBootstrapNodes, shareRatioLimit, peerBlockedCIDRs, peerAllowedCIDRs,
-    //   upload/download rate limits, connection/active limits, send buffer tuning, autoSequentialDownload,
+    //   upload/download rate limits, connection/active limits (including -1 semantics), queue/request tuning,
+    //   choking/mixed-mode/tracker announce tuning, send buffer tuning, autoSequentialDownload,
     //   proxy settings, encryption settings.
+    // - Advanced optional fields (`announce*`, `peerTurnover*`, `mixed/choking`, `piece/suggest`,
+    //   tracker timeout/concurrency, transport toggles, and related toggles) use nil as "leave unchanged".
     // Notes:
     // - shareRatioLimit is applied only when >= 0.
-    // - Several integer limits are clamped to non-negative values during runtime apply.
+    // - Some runtime integer settings are clamped to non-negative values.
+    // - Connection/active limits support -1 at runtime (libtorrent unlimited semantics).
     public var downloadDirectory: URL?
     public var listenInterfaces: [String]
     public var enableDistributedHashTable: Bool
@@ -109,11 +141,40 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
     public var activeTrackerLimit: Int
     public var activeLocalPeerDiscoveryLimit: Int
     public var activeTorrentLimit: Int
+    public var announceToAllTrackers: Bool?
+    public var announceToAllTiers: Bool?
+    public var peerTurnover: Int?
+    public var peerTurnoverCutoff: Int?
+    public var peerTurnoverInterval: Int?
+    public var connectionSpeed: Int
+    public var torrentConnectBoost: Int
+    public var mixedModeAlgorithm: SessionMixedModeAlgorithm?
+    public var chokingAlgorithm: SessionChokingAlgorithm?
+    public var seedChokingAlgorithm: SessionSeedChokingAlgorithm?
+    public var maxOutgoingRequestQueueSize: Int
+    public var maxAllowedIncomingRequestQueueSize: Int
+    public var wholePiecesThreshold: Int
+    public var enablePieceExtentAffinity: Bool?
+    public var suggestMode: SessionSuggestMode?
+    public var aioThreads: Int
+    public var checkingMemoryUsage: Int
+    public var filePoolSize: Int
+    public var maxConcurrentHTTPAnnounces: Int?
+    public var stopTrackerTimeout: Int?
+    public var includeIPOverheadInRateLimit: Bool?
+    public var allowMultipleConnectionsPerIP: Bool?
+    public var validateHTTPSTrackers: Bool?
+    public var enableSSRFMitigation: Bool?
+    public var enableOutgoingTCP: Bool?
+    public var enableIncomingTCP: Bool?
+    public var enableOutgoingUTP: Bool?
+    public var enableIncomingUTP: Bool?
     public var maxQueuedDiskBytes: Int
     public var sendBufferLowWatermarkBytes: Int
     public var sendBufferWatermarkBytes: Int
     public var sendBufferWatermarkFactorPercent: Int
     public var autoSequentialDownload: Bool
+    public var trackerPresetURLs: [String]
     public var proxy: SessionProxyConfiguration?
     public var encryption: SessionEncryptionConfiguration
 
@@ -142,11 +203,40 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         activeTrackerLimit: Int = 0,
         activeLocalPeerDiscoveryLimit: Int = 0,
         activeTorrentLimit: Int = 0,
+        announceToAllTrackers: Bool? = nil,
+        announceToAllTiers: Bool? = nil,
+        peerTurnover: Int? = nil,
+        peerTurnoverCutoff: Int? = nil,
+        peerTurnoverInterval: Int? = nil,
+        connectionSpeed: Int = 0,
+        torrentConnectBoost: Int = 0,
+        mixedModeAlgorithm: SessionMixedModeAlgorithm? = nil,
+        chokingAlgorithm: SessionChokingAlgorithm? = nil,
+        seedChokingAlgorithm: SessionSeedChokingAlgorithm? = nil,
+        maxOutgoingRequestQueueSize: Int = 0,
+        maxAllowedIncomingRequestQueueSize: Int = 0,
+        wholePiecesThreshold: Int = 0,
+        enablePieceExtentAffinity: Bool? = nil,
+        suggestMode: SessionSuggestMode? = nil,
+        aioThreads: Int = 0,
+        checkingMemoryUsage: Int = 0,
+        filePoolSize: Int = 0,
+        maxConcurrentHTTPAnnounces: Int? = nil,
+        stopTrackerTimeout: Int? = nil,
+        includeIPOverheadInRateLimit: Bool? = nil,
+        allowMultipleConnectionsPerIP: Bool? = nil,
+        validateHTTPSTrackers: Bool? = nil,
+        enableSSRFMitigation: Bool? = nil,
+        enableOutgoingTCP: Bool? = nil,
+        enableIncomingTCP: Bool? = nil,
+        enableOutgoingUTP: Bool? = nil,
+        enableIncomingUTP: Bool? = nil,
         maxQueuedDiskBytes: Int = 0,
         sendBufferLowWatermarkBytes: Int = 0,
         sendBufferWatermarkBytes: Int = 0,
         sendBufferWatermarkFactorPercent: Int = 0,
         autoSequentialDownload: Bool = false,
+        trackerPresetURLs: [String] = [],
         proxy: SessionProxyConfiguration? = nil,
         encryption: SessionEncryptionConfiguration = .default
     ) {
@@ -174,11 +264,40 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         self.activeTrackerLimit = activeTrackerLimit
         self.activeLocalPeerDiscoveryLimit = activeLocalPeerDiscoveryLimit
         self.activeTorrentLimit = activeTorrentLimit
+        self.announceToAllTrackers = announceToAllTrackers
+        self.announceToAllTiers = announceToAllTiers
+        self.peerTurnover = peerTurnover
+        self.peerTurnoverCutoff = peerTurnoverCutoff
+        self.peerTurnoverInterval = peerTurnoverInterval
+        self.connectionSpeed = connectionSpeed
+        self.torrentConnectBoost = torrentConnectBoost
+        self.mixedModeAlgorithm = mixedModeAlgorithm
+        self.chokingAlgorithm = chokingAlgorithm
+        self.seedChokingAlgorithm = seedChokingAlgorithm
+        self.maxOutgoingRequestQueueSize = maxOutgoingRequestQueueSize
+        self.maxAllowedIncomingRequestQueueSize = maxAllowedIncomingRequestQueueSize
+        self.wholePiecesThreshold = wholePiecesThreshold
+        self.enablePieceExtentAffinity = enablePieceExtentAffinity
+        self.suggestMode = suggestMode
+        self.aioThreads = aioThreads
+        self.checkingMemoryUsage = checkingMemoryUsage
+        self.filePoolSize = filePoolSize
+        self.maxConcurrentHTTPAnnounces = maxConcurrentHTTPAnnounces
+        self.stopTrackerTimeout = stopTrackerTimeout
+        self.includeIPOverheadInRateLimit = includeIPOverheadInRateLimit
+        self.allowMultipleConnectionsPerIP = allowMultipleConnectionsPerIP
+        self.validateHTTPSTrackers = validateHTTPSTrackers
+        self.enableSSRFMitigation = enableSSRFMitigation
+        self.enableOutgoingTCP = enableOutgoingTCP
+        self.enableIncomingTCP = enableIncomingTCP
+        self.enableOutgoingUTP = enableOutgoingUTP
+        self.enableIncomingUTP = enableIncomingUTP
         self.maxQueuedDiskBytes = maxQueuedDiskBytes
         self.sendBufferLowWatermarkBytes = sendBufferLowWatermarkBytes
         self.sendBufferWatermarkBytes = sendBufferWatermarkBytes
         self.sendBufferWatermarkFactorPercent = sendBufferWatermarkFactorPercent
         self.autoSequentialDownload = autoSequentialDownload
+        self.trackerPresetURLs = trackerPresetURLs
         self.proxy = proxy
         self.encryption = encryption
     }
@@ -210,11 +329,40 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         case activeTrackerLimit
         case activeLocalPeerDiscoveryLimit
         case activeTorrentLimit
+        case announceToAllTrackers
+        case announceToAllTiers
+        case peerTurnover
+        case peerTurnoverCutoff
+        case peerTurnoverInterval
+        case connectionSpeed
+        case torrentConnectBoost
+        case mixedModeAlgorithm
+        case chokingAlgorithm
+        case seedChokingAlgorithm
+        case maxOutgoingRequestQueueSize
+        case maxAllowedIncomingRequestQueueSize
+        case wholePiecesThreshold
+        case enablePieceExtentAffinity
+        case suggestMode
+        case aioThreads
+        case checkingMemoryUsage
+        case filePoolSize
+        case maxConcurrentHTTPAnnounces
+        case stopTrackerTimeout
+        case includeIPOverheadInRateLimit
+        case allowMultipleConnectionsPerIP
+        case validateHTTPSTrackers
+        case enableSSRFMitigation
+        case enableOutgoingTCP
+        case enableIncomingTCP
+        case enableOutgoingUTP
+        case enableIncomingUTP
         case maxQueuedDiskBytes
         case sendBufferLowWatermarkBytes
         case sendBufferWatermarkBytes
         case sendBufferWatermarkFactorPercent
         case autoSequentialDownload
+        case trackerPresetURLs
         case proxy
         case encryption
     }
@@ -255,6 +403,41 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
             try container.decodeIfPresent(Int.self, forKey: .activeLocalPeerDiscoveryLimit)
                 ?? defaults.activeLocalPeerDiscoveryLimit
         activeTorrentLimit = try container.decodeIfPresent(Int.self, forKey: .activeTorrentLimit) ?? defaults.activeTorrentLimit
+        announceToAllTrackers = try container.decodeIfPresent(Bool.self, forKey: .announceToAllTrackers)
+        announceToAllTiers = try container.decodeIfPresent(Bool.self, forKey: .announceToAllTiers)
+        peerTurnover = try container.decodeIfPresent(Int.self, forKey: .peerTurnover)
+        peerTurnoverCutoff = try container.decodeIfPresent(Int.self, forKey: .peerTurnoverCutoff)
+        peerTurnoverInterval = try container.decodeIfPresent(Int.self, forKey: .peerTurnoverInterval)
+        connectionSpeed = try container.decodeIfPresent(Int.self, forKey: .connectionSpeed) ?? defaults.connectionSpeed
+        torrentConnectBoost = try container.decodeIfPresent(Int.self, forKey: .torrentConnectBoost) ?? defaults.torrentConnectBoost
+        mixedModeAlgorithm =
+            try container.decodeIfPresent(SessionMixedModeAlgorithm.self, forKey: .mixedModeAlgorithm)
+        chokingAlgorithm =
+            try container.decodeIfPresent(SessionChokingAlgorithm.self, forKey: .chokingAlgorithm)
+        seedChokingAlgorithm =
+            try container.decodeIfPresent(SessionSeedChokingAlgorithm.self, forKey: .seedChokingAlgorithm)
+        maxOutgoingRequestQueueSize =
+            try container.decodeIfPresent(Int.self, forKey: .maxOutgoingRequestQueueSize)
+                ?? defaults.maxOutgoingRequestQueueSize
+        maxAllowedIncomingRequestQueueSize =
+            try container.decodeIfPresent(Int.self, forKey: .maxAllowedIncomingRequestQueueSize)
+                ?? defaults.maxAllowedIncomingRequestQueueSize
+        wholePiecesThreshold = try container.decodeIfPresent(Int.self, forKey: .wholePiecesThreshold) ?? defaults.wholePiecesThreshold
+        enablePieceExtentAffinity = try container.decodeIfPresent(Bool.self, forKey: .enablePieceExtentAffinity)
+        suggestMode = try container.decodeIfPresent(SessionSuggestMode.self, forKey: .suggestMode)
+        aioThreads = try container.decodeIfPresent(Int.self, forKey: .aioThreads) ?? defaults.aioThreads
+        checkingMemoryUsage = try container.decodeIfPresent(Int.self, forKey: .checkingMemoryUsage) ?? defaults.checkingMemoryUsage
+        filePoolSize = try container.decodeIfPresent(Int.self, forKey: .filePoolSize) ?? defaults.filePoolSize
+        maxConcurrentHTTPAnnounces = try container.decodeIfPresent(Int.self, forKey: .maxConcurrentHTTPAnnounces)
+        stopTrackerTimeout = try container.decodeIfPresent(Int.self, forKey: .stopTrackerTimeout)
+        includeIPOverheadInRateLimit = try container.decodeIfPresent(Bool.self, forKey: .includeIPOverheadInRateLimit)
+        allowMultipleConnectionsPerIP = try container.decodeIfPresent(Bool.self, forKey: .allowMultipleConnectionsPerIP)
+        validateHTTPSTrackers = try container.decodeIfPresent(Bool.self, forKey: .validateHTTPSTrackers)
+        enableSSRFMitigation = try container.decodeIfPresent(Bool.self, forKey: .enableSSRFMitigation)
+        enableOutgoingTCP = try container.decodeIfPresent(Bool.self, forKey: .enableOutgoingTCP)
+        enableIncomingTCP = try container.decodeIfPresent(Bool.self, forKey: .enableIncomingTCP)
+        enableOutgoingUTP = try container.decodeIfPresent(Bool.self, forKey: .enableOutgoingUTP)
+        enableIncomingUTP = try container.decodeIfPresent(Bool.self, forKey: .enableIncomingUTP)
         maxQueuedDiskBytes = try container.decodeIfPresent(Int.self, forKey: .maxQueuedDiskBytes) ?? defaults.maxQueuedDiskBytes
         sendBufferLowWatermarkBytes =
             try container.decodeIfPresent(Int.self, forKey: .sendBufferLowWatermarkBytes)
@@ -267,6 +450,7 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
                 ?? defaults.sendBufferWatermarkFactorPercent
         autoSequentialDownload = try container.decodeIfPresent(Bool.self, forKey: .autoSequentialDownload)
             ?? defaults.autoSequentialDownload
+        trackerPresetURLs = try container.decodeIfPresent([String].self, forKey: .trackerPresetURLs) ?? defaults.trackerPresetURLs
         proxy = try container.decodeIfPresent(SessionProxyConfiguration.self, forKey: .proxy)
         encryption = try container.decodeIfPresent(SessionEncryptionConfiguration.self, forKey: .encryption)
             ?? defaults.encryption
@@ -299,12 +483,78 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
         try container.encode(activeTrackerLimit, forKey: .activeTrackerLimit)
         try container.encode(activeLocalPeerDiscoveryLimit, forKey: .activeLocalPeerDiscoveryLimit)
         try container.encode(activeTorrentLimit, forKey: .activeTorrentLimit)
+        try container.encodeIfPresent(announceToAllTrackers, forKey: .announceToAllTrackers)
+        try container.encodeIfPresent(announceToAllTiers, forKey: .announceToAllTiers)
+        try container.encodeIfPresent(peerTurnover, forKey: .peerTurnover)
+        try container.encodeIfPresent(peerTurnoverCutoff, forKey: .peerTurnoverCutoff)
+        try container.encodeIfPresent(peerTurnoverInterval, forKey: .peerTurnoverInterval)
+        try container.encode(connectionSpeed, forKey: .connectionSpeed)
+        try container.encode(torrentConnectBoost, forKey: .torrentConnectBoost)
+        try container.encodeIfPresent(mixedModeAlgorithm, forKey: .mixedModeAlgorithm)
+        try container.encodeIfPresent(chokingAlgorithm, forKey: .chokingAlgorithm)
+        try container.encodeIfPresent(seedChokingAlgorithm, forKey: .seedChokingAlgorithm)
+        try container.encode(maxOutgoingRequestQueueSize, forKey: .maxOutgoingRequestQueueSize)
+        try container.encode(maxAllowedIncomingRequestQueueSize, forKey: .maxAllowedIncomingRequestQueueSize)
+        try container.encode(wholePiecesThreshold, forKey: .wholePiecesThreshold)
+        try container.encodeIfPresent(enablePieceExtentAffinity, forKey: .enablePieceExtentAffinity)
+        try container.encodeIfPresent(suggestMode, forKey: .suggestMode)
+        try container.encode(aioThreads, forKey: .aioThreads)
+        try container.encode(checkingMemoryUsage, forKey: .checkingMemoryUsage)
+        try container.encode(filePoolSize, forKey: .filePoolSize)
+        try container.encodeIfPresent(maxConcurrentHTTPAnnounces, forKey: .maxConcurrentHTTPAnnounces)
+        try container.encodeIfPresent(stopTrackerTimeout, forKey: .stopTrackerTimeout)
+        try container.encodeIfPresent(includeIPOverheadInRateLimit, forKey: .includeIPOverheadInRateLimit)
+        try container.encodeIfPresent(allowMultipleConnectionsPerIP, forKey: .allowMultipleConnectionsPerIP)
+        try container.encodeIfPresent(validateHTTPSTrackers, forKey: .validateHTTPSTrackers)
+        try container.encodeIfPresent(enableSSRFMitigation, forKey: .enableSSRFMitigation)
+        try container.encodeIfPresent(enableOutgoingTCP, forKey: .enableOutgoingTCP)
+        try container.encodeIfPresent(enableIncomingTCP, forKey: .enableIncomingTCP)
+        try container.encodeIfPresent(enableOutgoingUTP, forKey: .enableOutgoingUTP)
+        try container.encodeIfPresent(enableIncomingUTP, forKey: .enableIncomingUTP)
         try container.encode(maxQueuedDiskBytes, forKey: .maxQueuedDiskBytes)
         try container.encode(sendBufferLowWatermarkBytes, forKey: .sendBufferLowWatermarkBytes)
         try container.encode(sendBufferWatermarkBytes, forKey: .sendBufferWatermarkBytes)
         try container.encode(sendBufferWatermarkFactorPercent, forKey: .sendBufferWatermarkFactorPercent)
         try container.encode(autoSequentialDownload, forKey: .autoSequentialDownload)
+        try container.encode(trackerPresetURLs, forKey: .trackerPresetURLs)
         try container.encodeIfPresent(proxy, forKey: .proxy)
         try container.encode(encryption, forKey: .encryption)
+    }
+}
+
+public extension SessionConfiguration {
+    func applyingTransportBehavior(_ behavior: SessionTransportBehavior) -> SessionConfiguration {
+        var updated = self
+        updated.applyTransportBehavior(behavior)
+        return updated
+    }
+
+    mutating func applyTransportBehavior(_ behavior: SessionTransportBehavior) {
+        switch behavior {
+        case .balanced:
+            enableOutgoingTCP = true
+            enableIncomingTCP = true
+            enableOutgoingUTP = true
+            enableIncomingUTP = true
+            mixedModeAlgorithm = .peerProportional
+        case .preferTCP:
+            enableOutgoingTCP = true
+            enableIncomingTCP = true
+            enableOutgoingUTP = true
+            enableIncomingUTP = true
+            mixedModeAlgorithm = .preferTCP
+        case .tcpOnly:
+            enableOutgoingTCP = true
+            enableIncomingTCP = true
+            enableOutgoingUTP = false
+            enableIncomingUTP = false
+            mixedModeAlgorithm = .preferTCP
+        case .utpOnly:
+            enableOutgoingTCP = false
+            enableIncomingTCP = false
+            enableOutgoingUTP = true
+            enableIncomingUTP = true
+            mixedModeAlgorithm = .peerProportional
+        }
     }
 }
