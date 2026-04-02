@@ -203,6 +203,7 @@ typedef struct {
 
 const char *libtorrent_apple_bridge_version(void);
 bool libtorrent_apple_bridge_is_available(void);
+bool libtorrent_apple_bridge_supports_https_trackers(void);
 
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void);
 

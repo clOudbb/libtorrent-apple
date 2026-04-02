@@ -28,6 +28,8 @@ public actor TorrentSession {
     public private(set) var configuration: SessionConfiguration
     public private(set) var isRunning = false
 
+    private static let statusReadFailureAlertInterval = 20
+
     private var nativeSession: BridgeSessionHandle?
     private var alertPollTask: Task<Void, Never>?
     private var deferredApplyTask: Task<Void, Never>?
@@ -38,6 +40,7 @@ public actor TorrentSession {
     private var throughputOptimizerState = ThroughputOptimizerRuntimeState()
     private var throughputOptimizerInternalApply = false
     private var torrents: [TorrentID: TrackedTorrent] = [:]
+    private var statusReadFailureCounts: [TorrentID: Int] = [:]
     private let alertStreamStorage: AsyncStream<TorrentAlert>
     private let alertContinuation: AsyncStream<TorrentAlert>.Continuation
 
@@ -337,6 +340,7 @@ public actor TorrentSession {
         stopNativeAlertPolling()
         BridgeRuntime.destroySession(nativeSession)
         nativeSession = nil
+        statusReadFailureCounts = [:]
         isRunning = false
         emitAlert(.sessionStopped, message: "Torrent session stopped.")
     }
@@ -827,6 +831,7 @@ public actor TorrentSession {
 
         try BridgeRuntime.removeTorrent(session: session, id: id, deleteData: deleteData)
         torrents.removeValue(forKey: id)
+        statusReadFailureCounts.removeValue(forKey: id)
 
         let suffix = deleteData ? " and requested data deletion" : ""
         emitAlert(.torrentRemoved, torrentID: id, message: "Removed torrent \(removed.name)\(suffix).")
@@ -840,6 +845,7 @@ public actor TorrentSession {
 
         let nativeStatus = try BridgeRuntime.status(session: session, id: id)
         let status = materializeStatus(id: id, tracked: tracked, nativeStatus: nativeStatus)
+        statusReadFailureCounts.removeValue(forKey: id)
         syncTrackedTorrent(with: status)
         return status
     }
@@ -854,13 +860,27 @@ public actor TorrentSession {
         }
 
         return trackedTorrents.map { id, tracked in
-            guard let nativeStatus = try? BridgeRuntime.status(session: session, id: id) else {
+            do {
+                let nativeStatus = try BridgeRuntime.status(session: session, id: id)
+                statusReadFailureCounts.removeValue(forKey: id)
+                let status = materializeStatus(id: id, tracked: tracked, nativeStatus: nativeStatus)
+                syncTrackedTorrent(with: status)
+                return status
+            } catch {
+                let failureCount = (statusReadFailureCounts[id] ?? 0) + 1
+                statusReadFailureCounts[id] = failureCount
+
+                if failureCount == 1 || failureCount.isMultiple(of: Self.statusReadFailureAlertInterval) {
+                    emitAlert(
+                        .nativeEvent,
+                        torrentID: id,
+                        nativeEventName: "torrent_status_snapshot_failed",
+                        message: "Failed to fetch torrent status for \(id.rawValue); using cached snapshot (failure #\(failureCount)): \(error.localizedDescription)"
+                    )
+                }
+
                 return materializeCachedStatus(id: id, tracked: tracked)
             }
-
-            let status = materializeStatus(id: id, tracked: tracked, nativeStatus: nativeStatus)
-            syncTrackedTorrent(with: status)
-            return status
         }
     }
 
@@ -1484,9 +1504,9 @@ public actor TorrentSession {
         let resolvedState: TorrentState
 
         switch tracked.state {
-        case .running, .paused, .stopped, .removed:
+        case .paused, .stopped, .removed:
             resolvedState = tracked.state
-        case .idle:
+        case .running, .idle:
             resolvedState = BridgeRuntime.state(from: nativeStatus)
         }
 

@@ -299,6 +299,10 @@ bool libtorrent_apple_bridge_is_available(void) {
     return true;
 }
 
+bool libtorrent_apple_bridge_supports_https_trackers(void) {
+    return false;
+}
+
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void) {
     libtorrent_apple_session_configuration_t configuration = {0};
     configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;

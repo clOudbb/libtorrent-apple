@@ -25,6 +25,7 @@ BOOST_VERSION="${BOOST_VERSION:-1.76.0}"
 BOOST_SOURCE_URL="${BOOST_SOURCE_URL:-https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2}"
 BUILD_JOBS="${BUILD_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || printf '4\n')}"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/libtorrent-apple-clang-cache}"
+HTTPS_TRACKER_BACKEND="${HTTPS_TRACKER_BACKEND:-disabled}"
 
 if [[ ! -d "${SOURCE_DIR}" ]]; then
     echo "error: libtorrent source not found at ${SOURCE_DIR}. Run scripts/sync-libtorrent.sh first." >&2
@@ -137,10 +138,29 @@ build_libtorrent_for_sdk() {
         -DBOOST_INCLUDEDIR="${boost_include_dir}"
         -DBoost_INCLUDE_DIR="${boost_include_dir}"
         -DBoost_NO_BOOST_CMAKE=ON
-        -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
-        -DCMAKE_DISABLE_FIND_PACKAGE_GnuTLS=TRUE
-        -DCMAKE_DISABLE_FIND_PACKAGE_LibGcrypt=TRUE
     )
+
+    case "${HTTPS_TRACKER_BACKEND}" in
+        auto)
+            ;;
+        openssl)
+            cmake_args+=(-Dgnutls=OFF)
+            ;;
+        gnutls)
+            cmake_args+=(-Dgnutls=ON)
+            ;;
+        disabled)
+            cmake_args+=(
+                -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
+                -DCMAKE_DISABLE_FIND_PACKAGE_GnuTLS=TRUE
+                -DCMAKE_DISABLE_FIND_PACKAGE_LibGcrypt=TRUE
+            )
+            ;;
+        *)
+            echo "error: HTTPS_TRACKER_BACKEND must be one of: auto|openssl|gnutls|disabled" >&2
+            exit 1
+            ;;
+    esac
 
     if [[ "${sdk}" == iphoneos || "${sdk}" == iphonesimulator ]]; then
         cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS)
@@ -317,6 +337,7 @@ BOOST_SOURCE_URL=${BOOST_SOURCE_URL}
 BOOST_INCLUDE_DIR=${BOOST_INCLUDE_DIR_USED}
 REQUIRED_SYSTEM_FRAMEWORKS=CFNetwork,CoreFoundation,Security,SystemConfiguration
 REQUIRED_LINK_LIBRARIES=libc++
+HTTPS_TRACKER_BACKEND=${HTTPS_TRACKER_BACKEND}
 EOF
 }
 

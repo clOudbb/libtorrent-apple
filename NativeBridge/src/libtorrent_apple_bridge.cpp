@@ -1443,6 +1443,15 @@ bool libtorrent_apple_bridge_is_available(void)
     return true;
 }
 
+bool libtorrent_apple_bridge_supports_https_trackers(void)
+{
+#if TORRENT_USE_SSL || defined(TORRENT_USE_GNUTLS)
+    return true;
+#else
+    return false;
+#endif
+}
+
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void)
 {
     libtorrent_apple_session_configuration_t configuration = {};

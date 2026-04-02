@@ -70,11 +70,13 @@ public enum LibtorrentApple {
     public static let packageName = "LibtorrentApple"
     public static let bridgeVersion = String(cString: libtorrent_apple_bridge_version())
     public static let backendAvailable = libtorrent_apple_bridge_is_available()
+    public static let backendSupportsHTTPSTrackers = libtorrent_apple_bridge_supports_https_trackers()
     public static let backendInfo = TorrentBackendInfo(
         vendor: "libtorrent",
         libraryVersion: bridgeVersion,
         bridgeVersion: bridgeVersion,
-        packageName: packageName
+        packageName: packageName,
+        supportsHTTPSTrackers: backendSupportsHTTPSTrackers
     )
 }
 
