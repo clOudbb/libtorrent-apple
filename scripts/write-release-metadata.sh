@@ -90,7 +90,37 @@ cat > "${BINARY_TARGET_SNIPPET_PATH}" <<EOF
 EOF
 
 cat > "${RELEASE_NOTES_PATH}" <<EOF
-# ${RELEASE_TAG}
+# 🚀 ${RELEASE_TAG}
+
+## 中文
+
+<!-- 如需补充中文发布说明，请在对应分节下添加条目。 -->
+
+✨ 功能增强
+
+⚙️ 构建优化
+
+🐛 问题修复
+
+🧪 稳定性改进
+
+📚 文档更新
+
+---
+
+## English
+
+<!-- Add release-note bullets under the sections below when a manual summary is needed. -->
+
+✨ Features
+
+⚙️ Build Improvements
+
+🐛 Bug Fixes
+
+🧪 Stability
+
+📚 Docs
 
 ## Artifact
 
