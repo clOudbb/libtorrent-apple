@@ -385,6 +385,52 @@ bool libtorrent_apple_session_apply_configuration(
     return true;
 }
 
+bool libtorrent_apple_session_reopen_network_sockets(
+    libtorrent_apple_session_t *session,
+    bool reopen_map_ports,
+    libtorrent_apple_error_t *error_out
+) {
+    clear_error(error_out);
+
+    if (session == NULL) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    push_alert(
+        session,
+        1019,
+        "placeholder_network_sockets_reopened",
+        reopen_map_ports
+            ? "Placeholder network sockets reopened with port remap."
+            : "Placeholder network sockets reopened.",
+        ""
+    );
+    return true;
+}
+
+bool libtorrent_apple_session_get_listen_state(
+    libtorrent_apple_session_t *session,
+    bool *is_listening_out,
+    int32_t *listen_port_out,
+    int32_t *ssl_listen_port_out,
+    libtorrent_apple_error_t *error_out
+) {
+    clear_error(error_out);
+
+    if (session == NULL) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (is_listening_out == NULL || listen_port_out == NULL || ssl_listen_port_out == NULL) {
+        return fail(error_out, -1, "listen state outputs must not be null");
+    }
+
+    *is_listening_out = 1;
+    *listen_port_out = session->configuration.listen_port > 0 ? session->configuration.listen_port : 0;
+    *ssl_listen_port_out = 0;
+    return true;
+}
+
 void libtorrent_apple_session_destroy(libtorrent_apple_session_t *session) {
     placeholder_alert_t *current_alert = NULL;
     placeholder_torrent_t *current = NULL;

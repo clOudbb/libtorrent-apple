@@ -180,7 +180,7 @@ public struct SessionConfiguration: Sendable, Hashable, Codable {
 
     public init(
         downloadDirectory: URL? = nil,
-        listenInterfaces: [String] = ["0.0.0.0:0"],
+        listenInterfaces: [String] = ["0.0.0.0:0", "[::]:0"],
         enableDistributedHashTable: Bool = true,
         enableLocalPeerDiscovery: Bool = true,
         enableUPnP: Bool = false,

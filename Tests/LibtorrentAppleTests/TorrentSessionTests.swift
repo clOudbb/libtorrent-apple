@@ -5,6 +5,11 @@ import Testing
 @Suite(.serialized)
 struct TorrentSessionTests {
     @Test
+    func sessionConfigurationDefaultsToDualStackListenInterfaces() {
+        #expect(SessionConfiguration.default.listenInterfaces == ["0.0.0.0:0", "[::]:0"])
+    }
+
+    @Test
     func torrentBackendInfoDecodingBackfillsHTTPSCapability() throws {
         let legacyJSON = """
         {"vendor":"libtorrent","libraryVersion":"2.0.12","bridgeVersion":"2.0.12","packageName":"LibtorrentApple"}
@@ -118,7 +123,112 @@ struct TorrentSessionTests {
         #expect(!restored.id.rawValue.isEmpty)
         #expect(statuses.count == 1)
     }
-    
+
+    @Test
+    func sessionDiagnosticsExposeListenState() async throws {
+        let session = TorrentSession()
+        try await session.start()
+
+        let diagnostics = try await session.sessionDiagnostics()
+
+        #expect(BridgeRuntime.supportsListenStateDiagnostics)
+        #expect(diagnostics.isListening != nil)
+        #expect(diagnostics.listenPort != nil)
+        #expect(diagnostics.sslListenPort != nil)
+
+        await session.stop()
+    }
+
+    @Test
+    func reopenNetworkSocketsUsesNativeBridgeFunction() async throws {
+        let session = TorrentSession()
+        try await session.start()
+
+        let reopenedNatively = try await session.reopenNetworkSockets()
+
+        #expect(BridgeRuntime.supportsNetworkSocketReopen)
+        #expect(reopenedNatively)
+
+        await session.stop()
+    }
+
+    @Test
+    func networkRecoveryReannouncesEvenWhenSocketRecoveryThrows() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleRecoveryFallback-\(UUID().uuidString)", isDirectory: true)
+        let torrentFileURL = rootDirectory.appendingPathComponent("episode.torrent")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "episode-04.mkv").write(to: torrentFileURL, options: .atomic)
+
+        let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+        try await session.start()
+        _ = try await session.addTorrent(from: .torrentFile(torrentFileURL, displayName: "Episode 04"))
+
+        let reannounceCount = try await session.recoverNetworkAndReannounce(
+            nativeEventName: "session_network_path_changed",
+            triggerDescription: "Network path changed",
+            recovery: {
+                throw LibtorrentAppleError.nativeOperationFailed(-77, "Injected recovery failure")
+            }
+        )
+
+        #expect(reannounceCount == 1)
+
+        await session.stop()
+    }
+
+    @Test
+    func binaryBackendsReportHTTPSTrackerSupport() {
+        let packageMode = ProcessInfo.processInfo.environment["LIBTORRENT_APPLE_PACKAGE_MODE"]
+
+        if packageMode == "local-binary" || packageMode == "remote-binary" {
+            #expect(LibtorrentApple.backendSupportsHTTPSTrackers)
+            #expect(LibtorrentApple.backendInfo.supportsHTTPSTrackers)
+        }
+    }
+
+    @Test
+    func httpsTrackerReannounceDoesNotFailWithUnsupportedURLProtocolWhenBackendEnabled() async throws {
+        guard LibtorrentApple.backendSupportsHTTPSTrackers else {
+            return
+        }
+
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleHTTPSTrackers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+
+        let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+        try await session.start()
+
+        let trackerURL = "https://127.0.0.1:1/announce"
+        let encodedTrackerURL = try #require(
+            trackerURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        )
+        let magnetURL = try #require(
+            URL(string:
+                "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678&dn=HTTPS%20Tracker%20Test&tr=\(encodedTrackerURL)"
+            )
+        )
+
+        let added = try await session.addTorrent(
+            from: .magnetLink(magnetURL, displayName: "HTTPS Tracker Test")
+        )
+        let handle = try #require(await session.handle(for: added.id))
+
+        try await handle.forceReannounce(after: 0, ignoreMinimumInterval: true)
+
+        let tracker = try await waitForTrackerFailure(on: handle, expectedURL: trackerURL, timeoutSeconds: 5)
+        let trackerMessage = tracker.message?.lowercased() ?? ""
+
+        #expect(tracker.url == trackerURL)
+        #expect(tracker.failureCount > 0 || !trackerMessage.isEmpty)
+        #expect(!trackerMessage.contains("unsupported_url_protocol"))
+        #expect(!trackerMessage.contains("unsupported url protocol"))
+
+        await session.stop()
+    }
+
     @Test
     func invalidMagnetSourceThrows() async throws {
         let session = TorrentSession()
@@ -571,4 +681,34 @@ struct TorrentSessionTests {
         data.append(Data("ee".utf8))
         return data
     }
+
+    private func waitForTrackerFailure(
+        on handle: TorrentHandle,
+        expectedURL: String,
+        timeoutSeconds: TimeInterval
+    ) async throws -> TorrentTracker {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+        while Date() < deadline {
+            let trackers = try await handle.trackers()
+
+            if let tracker = trackers.first(where: { tracker in
+                tracker.url == expectedURL && (tracker.failureCount > 0 || !(tracker.message ?? "").isEmpty)
+            }) {
+                return tracker
+            }
+
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        if let tracker = try await handle.trackers().first(where: { $0.url == expectedURL }) {
+            return tracker
+        }
+
+        throw TrackerWaitError.timedOut
+    }
+}
+
+private enum TrackerWaitError: Error {
+    case timedOut
 }

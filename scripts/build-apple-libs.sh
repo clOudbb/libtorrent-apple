@@ -25,7 +25,10 @@ BOOST_VERSION="${BOOST_VERSION:-1.76.0}"
 BOOST_SOURCE_URL="${BOOST_SOURCE_URL:-https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2}"
 BUILD_JOBS="${BUILD_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || printf '4\n')}"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/libtorrent-apple-clang-cache}"
-HTTPS_TRACKER_BACKEND="${HTTPS_TRACKER_BACKEND:-disabled}"
+HTTPS_TRACKER_BACKEND="${HTTPS_TRACKER_BACKEND:-openssl}"
+IPHONEOS_ARCHS="${IPHONEOS_ARCHS:-arm64}"
+IPHONESIMULATOR_ARCHS="${IPHONESIMULATOR_ARCHS:-arm64 x86_64}"
+MACOSX_ARCHS="${MACOSX_ARCHS:-arm64 x86_64}"
 
 if [[ ! -d "${SOURCE_DIR}" ]]; then
     echo "error: libtorrent source not found at ${SOURCE_DIR}. Run scripts/sync-libtorrent.sh first." >&2
@@ -50,6 +53,29 @@ require_command() {
     fi
 }
 
+resolve_absolute_path() {
+    local input_path="$1"
+
+    if [[ -d "${input_path}" ]]; then
+        (
+            cd "${input_path}"
+            pwd
+        )
+        return
+    fi
+
+    if [[ -e "${input_path}" ]]; then
+        (
+            cd "$(dirname "${input_path}")"
+            printf '%s/%s\n' "$(pwd)" "$(basename "${input_path}")"
+        )
+        return
+    fi
+
+    echo "error: path does not exist: ${input_path}" >&2
+    exit 1
+}
+
 prepare_boost_headers() {
     if [[ -n "${BOOST_INCLUDE_DIR:-}" ]]; then
         if [[ ! -f "${BOOST_INCLUDE_DIR}/boost/config.hpp" ]]; then
@@ -57,7 +83,7 @@ prepare_boost_headers() {
             exit 1
         fi
 
-        printf '%s\n' "${BOOST_INCLUDE_DIR}"
+        resolve_absolute_path "${BOOST_INCLUDE_DIR}"
         return
     fi
 
@@ -80,7 +106,7 @@ prepare_boost_headers() {
         exit 1
     fi
 
-    printf '%s\n' "${boost_source_root}"
+    resolve_absolute_path "${boost_source_root}"
 }
 
 cmake_build_dir_for_sdk() {
@@ -93,6 +119,255 @@ framework_dir_for_sdk() {
 
 bridge_archive_for_sdk() {
     printf '%s\n' "${BUILD_DIR}/$1/bridge/${FRAMEWORK_NAME}_bridge.a"
+}
+
+sdk_env_suffix() {
+    printf '%s\n' "$1" | tr '[:lower:]-' '[:upper:]_'
+}
+
+resolve_sdk_env_value() {
+    local base_name="$1"
+    local sdk="$2"
+    local sdk_suffix
+    local sdk_key
+
+    sdk_suffix="$(sdk_env_suffix "${sdk}")"
+    sdk_key="${base_name}_${sdk_suffix}"
+
+    if [[ -n "${!sdk_key:-}" ]]; then
+        printf '%s\n' "${!sdk_key}"
+        return
+    fi
+
+    printf '%s\n' "${!base_name:-}"
+}
+
+first_existing_path() {
+    local path
+    for path in "$@"; do
+        if [[ -e "${path}" ]]; then
+            printf '%s\n' "${path}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+CURRENT_OPENSSL_INCLUDE_DIR=""
+CURRENT_OPENSSL_SSL_LIBRARY=""
+CURRENT_OPENSSL_CRYPTO_LIBRARY=""
+CURRENT_EXTRA_ARCHIVES=()
+CURRENT_FRAMEWORK_ARCHS=()
+OPENSSL_SUPPORT_ROOT=""
+OPENSSL_SUPPORT_PREPARED=0
+
+prepare_local_openssl_support() {
+    local candidate
+    local repo_head
+    local extraction_root
+
+    if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then
+        return
+    fi
+
+    if [[ "${OPENSSL_SUPPORT_PREPARED}" == "1" ]]; then
+        return
+    fi
+
+    OPENSSL_SUPPORT_PREPARED=1
+
+    if [[ -n "${OPENSSL_UNIVERSAL_DIR:-}" ]]; then
+        if [[ ! -d "${OPENSSL_UNIVERSAL_DIR}" ]]; then
+            echo "error: OPENSSL_UNIVERSAL_DIR does not exist: ${OPENSSL_UNIVERSAL_DIR}" >&2
+            exit 1
+        fi
+
+        if [[ -f "${OPENSSL_UNIVERSAL_DIR}/macosx/lib/libssl.a" ]]; then
+            OPENSSL_SUPPORT_ROOT="$(resolve_absolute_path "${OPENSSL_UNIVERSAL_DIR}")"
+            return
+        fi
+
+        echo "error: OPENSSL_UNIVERSAL_DIR must point to an OpenSSL-Universal checkout containing <sdk>/lib/libssl.a." >&2
+        exit 1
+    fi
+
+    for candidate in \
+        "${ROOT_DIR}/Vendor/OpenSSL" \
+        "${ROOT_DIR}/Vendor/OpenSSL-Universal" \
+        "${HOME}/Library/Caches/org.swift.swiftpm/repositories"/OpenSSL-*; do
+        [[ -e "${candidate}" ]] || continue
+
+        if [[ -f "${candidate}/macosx/lib/libssl.a" ]]; then
+            OPENSSL_SUPPORT_ROOT="$(resolve_absolute_path "${candidate}")"
+            return
+        fi
+
+        if ! git --git-dir="${candidate}" cat-file -e HEAD:macosx/lib/libssl.a >/dev/null 2>&1; then
+            continue
+        fi
+
+        repo_head="$(git --git-dir="${candidate}" rev-parse HEAD)"
+        extraction_root="${BUILD_DIR}/vendor/openssl-universal/${repo_head}"
+
+        if [[ ! -f "${extraction_root}/.source-head" ]] || [[ "$(cat "${extraction_root}/.source-head")" != "${repo_head}" ]]; then
+            rm -rf "${extraction_root}"
+            mkdir -p "${extraction_root}"
+            git --git-dir="${candidate}" archive HEAD \
+                iphoneos/include \
+                iphoneos/lib \
+                iphonesimulator/include \
+                iphonesimulator/lib \
+                macosx/include \
+                macosx/lib | tar -xf - -C "${extraction_root}"
+            printf '%s\n' "${repo_head}" > "${extraction_root}/.source-head"
+        fi
+
+        OPENSSL_SUPPORT_ROOT="$(resolve_absolute_path "${extraction_root}")"
+        return
+    done
+}
+
+configure_crypto_backend_for_sdk() {
+    local sdk="$1"
+    local sdk_suffix
+    local openssl_sdk_dir=""
+
+    CURRENT_OPENSSL_INCLUDE_DIR=""
+    CURRENT_OPENSSL_SSL_LIBRARY=""
+    CURRENT_OPENSSL_CRYPTO_LIBRARY=""
+    CURRENT_EXTRA_ARCHIVES=()
+
+    if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then
+        return
+    fi
+
+    sdk_suffix="$(sdk_env_suffix "${sdk}")"
+
+    CURRENT_OPENSSL_INCLUDE_DIR="$(resolve_sdk_env_value OPENSSL_INCLUDE_DIR "${sdk}")"
+    CURRENT_OPENSSL_SSL_LIBRARY="$(resolve_sdk_env_value OPENSSL_SSL_LIBRARY "${sdk}")"
+    CURRENT_OPENSSL_CRYPTO_LIBRARY="$(resolve_sdk_env_value OPENSSL_CRYPTO_LIBRARY "${sdk}")"
+
+    if [[ -z "${CURRENT_OPENSSL_INCLUDE_DIR}" || -z "${CURRENT_OPENSSL_SSL_LIBRARY}" || -z "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" ]]; then
+        prepare_local_openssl_support
+
+        if [[ -n "${OPENSSL_SUPPORT_ROOT}" ]]; then
+            openssl_sdk_dir="${OPENSSL_SUPPORT_ROOT}/${sdk}"
+            if [[ -z "${CURRENT_OPENSSL_INCLUDE_DIR}" && -d "${openssl_sdk_dir}/include" ]]; then
+                CURRENT_OPENSSL_INCLUDE_DIR="${openssl_sdk_dir}/include"
+            fi
+            if [[ -z "${CURRENT_OPENSSL_SSL_LIBRARY}" && -f "${openssl_sdk_dir}/lib/libssl.a" ]]; then
+                CURRENT_OPENSSL_SSL_LIBRARY="${openssl_sdk_dir}/lib/libssl.a"
+            fi
+            if [[ -z "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" && -f "${openssl_sdk_dir}/lib/libcrypto.a" ]]; then
+                CURRENT_OPENSSL_CRYPTO_LIBRARY="${openssl_sdk_dir}/lib/libcrypto.a"
+            fi
+        fi
+    fi
+
+    if [[ "${sdk}" == macosx ]]; then
+        if [[ -z "${CURRENT_OPENSSL_INCLUDE_DIR}" ]]; then
+            CURRENT_OPENSSL_INCLUDE_DIR="$(
+                first_existing_path \
+                    /opt/homebrew/opt/openssl@3/include \
+                    /usr/local/opt/openssl@3/include \
+                    /opt/homebrew/opt/openssl/include \
+                    /usr/local/opt/openssl/include \
+                    /usr/local/Cellar/openssl@3/*/include \
+                || true
+            )"
+        fi
+
+        if [[ -z "${CURRENT_OPENSSL_SSL_LIBRARY}" ]]; then
+            CURRENT_OPENSSL_SSL_LIBRARY="$(
+                first_existing_path \
+                    /opt/homebrew/opt/openssl@3/lib/libssl.a \
+                    /usr/local/opt/openssl@3/lib/libssl.a \
+                    /opt/homebrew/opt/openssl/lib/libssl.a \
+                    /usr/local/opt/openssl/lib/libssl.a \
+                    /usr/local/Cellar/openssl@3/*/lib/libssl.a \
+                || true
+            )"
+        fi
+
+        if [[ -z "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" ]]; then
+            CURRENT_OPENSSL_CRYPTO_LIBRARY="$(
+                first_existing_path \
+                    /opt/homebrew/opt/openssl@3/lib/libcrypto.a \
+                    /usr/local/opt/openssl@3/lib/libcrypto.a \
+                    /opt/homebrew/opt/openssl/lib/libcrypto.a \
+                    /usr/local/opt/openssl/lib/libcrypto.a \
+                    /usr/local/Cellar/openssl@3/*/lib/libcrypto.a \
+                || true
+            )"
+        fi
+    fi
+
+    if [[ -z "${CURRENT_OPENSSL_INCLUDE_DIR}" || -z "${CURRENT_OPENSSL_SSL_LIBRARY}" || -z "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" ]]; then
+        echo "error: HTTPS_TRACKER_BACKEND=openssl requires Apple-platform OpenSSL paths for ${sdk}." >&2
+        echo "Set OPENSSL_INCLUDE_DIR_${sdk_suffix}, OPENSSL_SSL_LIBRARY_${sdk_suffix}, and OPENSSL_CRYPTO_LIBRARY_${sdk_suffix} (or generic OPENSSL_*)." >&2
+        echo "You can also point OPENSSL_UNIVERSAL_DIR at a local OpenSSL-Universal checkout." >&2
+        exit 1
+    fi
+
+    CURRENT_EXTRA_ARCHIVES=("${CURRENT_OPENSSL_SSL_LIBRARY}" "${CURRENT_OPENSSL_CRYPTO_LIBRARY}")
+}
+
+thin_archive_to_current_archs() {
+    local input_archive="$1"
+    local output_archive="$2"
+    local output_dir
+    local base_name
+    local arch
+    local available_archs
+    local arch_count
+    local thinned_archives=()
+
+    output_dir="$(dirname "${output_archive}")"
+    base_name="$(basename "${output_archive}" .a)"
+
+    mkdir -p "${output_dir}"
+    rm -f "${output_archive}"
+    available_archs="$(xcrun lipo -archs "${input_archive}")"
+    arch_count="$(printf '%s\n' "${available_archs}" | wc -w | tr -d ' ')"
+
+    if [[ "${#CURRENT_FRAMEWORK_ARCHS[@]}" -eq 0 ]]; then
+        cp "${input_archive}" "${output_archive}"
+        return
+    fi
+
+    if [[ "${#CURRENT_FRAMEWORK_ARCHS[@]}" -eq 1 ]]; then
+        if ! printf '%s\n' "${available_archs}" | tr ' ' '\n' | grep -qx "${CURRENT_FRAMEWORK_ARCHS[0]}"; then
+            echo "error: archive ${input_archive} does not contain architecture ${CURRENT_FRAMEWORK_ARCHS[0]}" >&2
+            exit 1
+        fi
+
+        if [[ "${arch_count}" == "1" ]]; then
+            cp "${input_archive}" "${output_archive}"
+        else
+            lipo -thin "${CURRENT_FRAMEWORK_ARCHS[0]}" "${input_archive}" -output "${output_archive}"
+        fi
+        return
+    fi
+
+    for arch in "${CURRENT_FRAMEWORK_ARCHS[@]}"; do
+        local arch_archive="${output_dir}/${base_name}-${arch}.a"
+
+        if ! printf '%s\n' "${available_archs}" | tr ' ' '\n' | grep -qx "${arch}"; then
+            echo "error: archive ${input_archive} does not contain architecture ${arch}" >&2
+            exit 1
+        fi
+
+        if [[ "${arch_count}" == "1" ]]; then
+            cp "${input_archive}" "${arch_archive}"
+        else
+            lipo -thin "${arch}" "${input_archive}" -output "${arch_archive}"
+        fi
+        thinned_archives+=("${arch_archive}")
+    done
+
+    lipo -create "${thinned_archives[@]}" -output "${output_archive}"
+    rm -f "${thinned_archives[@]}"
 }
 
 build_libtorrent_for_sdk() {
@@ -139,6 +414,15 @@ build_libtorrent_for_sdk() {
         -DBoost_INCLUDE_DIR="${boost_include_dir}"
         -DBoost_NO_BOOST_CMAKE=ON
     )
+
+    if [[ "${HTTPS_TRACKER_BACKEND}" == "openssl" ]]; then
+        cmake_args+=(
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
+            -DOPENSSL_INCLUDE_DIR="${CURRENT_OPENSSL_INCLUDE_DIR}"
+            -DOPENSSL_SSL_LIBRARY="${CURRENT_OPENSSL_SSL_LIBRARY}"
+            -DOPENSSL_CRYPTO_LIBRARY="${CURRENT_OPENSSL_CRYPTO_LIBRARY}"
+        )
+    fi
 
     case "${HTTPS_TRACKER_BACKEND}" in
         auto)
@@ -189,6 +473,7 @@ build_bridge_archive_for_sdk() {
     local cxx_compiler
     local deployment_flag
     local bridge_archives=()
+    local bridge_cflags=()
     local arch
 
     rm -rf "${bridge_dir}"
@@ -213,6 +498,26 @@ build_bridge_archive_for_sdk() {
             ;;
     esac
 
+    case "${HTTPS_TRACKER_BACKEND}" in
+        openssl)
+            bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1)
+            if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" ]]; then
+                bridge_cflags+=(-I"${CURRENT_OPENSSL_INCLUDE_DIR}")
+            fi
+            ;;
+        gnutls)
+            bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_GNUTLS=1)
+            ;;
+        auto)
+            if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" && -n "${CURRENT_OPENSSL_SSL_LIBRARY}" && -n "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" ]]; then
+                bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1 -I"${CURRENT_OPENSSL_INCLUDE_DIR}")
+            fi
+            ;;
+        disabled)
+            bridge_cflags+=(-DTORRENT_USE_SSL=0)
+            ;;
+    esac
+
     for arch in "${archs[@]}"; do
         local object_path="${bridge_dir}/${FRAMEWORK_NAME}_${arch}.o"
         local archive_path="${bridge_dir}/${FRAMEWORK_NAME}_${arch}.a"
@@ -226,7 +531,8 @@ build_bridge_archive_for_sdk() {
             "${deployment_flag}" \
             -I"${NATIVE_BRIDGE_DIR}/include" \
             -I"${SOURCE_DIR}/include" \
-            -I"${boost_include_dir}"
+            -I"${boost_include_dir}" \
+            "${bridge_cflags[@]}"
 
         libtool -static -o "${archive_path}" "${object_path}"
         bridge_archives+=("${archive_path}")
@@ -244,6 +550,9 @@ write_framework_bundle() {
     local deployment_target="$2"
     local libtorrent_archive="$3"
     local bridge_archive="$4"
+    shift 4
+    local extra_archives=("$@")
+    local thinned_extra_archives=()
     local framework_dir
     local headers_dir
     local modules_dir
@@ -280,7 +589,23 @@ write_framework_bundle() {
         mkdir -p "${headers_dir}" "${modules_dir}"
     fi
 
-    libtool -static -o "${binary_path}" "${bridge_archive}" "${libtorrent_archive}"
+    if [[ "${#extra_archives[@]}" -gt 0 ]]; then
+        local extra_archives_dir="${BUILD_DIR}/${sdk}/thinned-extra-archives"
+        local extra_archive_index=0
+        local extra_archive
+
+        rm -rf "${extra_archives_dir}"
+        mkdir -p "${extra_archives_dir}"
+
+        for extra_archive in "${extra_archives[@]}"; do
+            local thinned_archive_path="${extra_archives_dir}/$(basename "${extra_archive}" .a)-${extra_archive_index}.a"
+            thin_archive_to_current_archs "${extra_archive}" "${thinned_archive_path}"
+            thinned_extra_archives+=("${thinned_archive_path}")
+            ((extra_archive_index += 1))
+        done
+    fi
+
+    libtool -static -o "${binary_path}" "${bridge_archive}" "${libtorrent_archive}" "${thinned_extra_archives[@]}"
 
     cp "${NATIVE_BRIDGE_DIR}/include/LibtorrentAppleBinary.h" "${headers_dir}/LibtorrentAppleBinary.h"
     cp "${NATIVE_BRIDGE_DIR}/include/libtorrent_apple_bridge.h" "${headers_dir}/libtorrent_apple_bridge.h"
@@ -361,15 +686,15 @@ for sdk in "${SDKS[@]}"; do
     case "${sdk}" in
         iphoneos)
             deployment_target="${IOS_DEPLOYMENT_TARGET}"
-            archs=(arm64)
+            read -r -a archs <<< "${IPHONEOS_ARCHS}"
             ;;
         iphonesimulator)
             deployment_target="${IOS_DEPLOYMENT_TARGET}"
-            archs=(arm64 x86_64)
+            read -r -a archs <<< "${IPHONESIMULATOR_ARCHS}"
             ;;
         macosx)
             deployment_target="${MACOS_DEPLOYMENT_TARGET}"
-            archs=(arm64 x86_64)
+            read -r -a archs <<< "${MACOSX_ARCHS}"
             ;;
         *)
             echo "error: unsupported sdk ${sdk}" >&2
@@ -378,11 +703,13 @@ for sdk in "${SDKS[@]}"; do
     esac
 
     mkdir -p "${BUILD_DIR}/${sdk}"
+    CURRENT_FRAMEWORK_ARCHS=("${archs[@]}")
+    configure_crypto_backend_for_sdk "${sdk}"
 
     libtorrent_archive="$(build_libtorrent_for_sdk "${sdk}" "${deployment_target}" "${BOOST_INCLUDE_DIR_USED}" "${archs[@]}")"
     build_bridge_archive_for_sdk "${sdk}" "${deployment_target}" "${BOOST_INCLUDE_DIR_USED}" "${archs[@]}"
     bridge_archive="$(bridge_archive_for_sdk "${sdk}")"
-    write_framework_bundle "${sdk}" "${deployment_target}" "${libtorrent_archive}" "${bridge_archive}"
+    write_framework_bundle "${sdk}" "${deployment_target}" "${libtorrent_archive}" "${bridge_archive}" "${CURRENT_EXTRA_ARCHIVES[@]}"
 
     echo "Built ${FRAMEWORK_NAME}.framework for ${sdk}"
 done

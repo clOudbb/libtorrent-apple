@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.4")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.5")
 ```
 
 导入模块：
@@ -177,6 +177,13 @@ let restoredHandle = try await downloader.addTorrent(
 print(try await restoredHandle.status().name)
 ```
 
+```swift
+_ = try await downloader.handleNetworkPathChanged()
+_ = try await downloader.handleSystemWakeupDetected()
+```
+
+`handleNetworkPathChanged()` 和 `handleSystemWakeupDetected()` 会在 native bridge 支持时先重开 libtorrent network sockets，再批量 reannounce。iOS 下游 App 应从 `NWPathMonitor` 更新和系统唤醒回调中主动调用它们。当前默认 `SessionConfiguration.listenInterfaces` 已改为显式双栈绑定：`0.0.0.0:0,[::]:0`。
+
 ## 这版 API 已经覆盖的能力
 
 当前版本已经包含：
@@ -193,6 +200,13 @@ print(try await restoredHandle.status().name)
 - downloader 级 stats stream 和 piece update stream
 - 代理、加密、队列、缓存、send buffer 等 session 配置
 - qB 风格 swarm 计数能力（`peerCount/seedCount` + `peerTotalCount/seedTotalCount`）
+
+## HTTPS Tracker 与 TLS Backend
+
+- `v0.2.5` release 构建默认启用 `OpenSSL` HTTPS tracker backend。
+- 运行时可通过 `LibtorrentApple.backendInfo.supportsHTTPSTrackers` 确认能力位。
+- 回归测试已覆盖 `https://.../announce` tracker URL 不再落入 `unsupported_url_protocol`。
+- 本地 release 构建会优先从本地 `OpenSSL-Universal` checkout 或 SwiftPM cache 自动发现 Apple 平台 OpenSSL 输入；若未显式传入 `OPENSSL_*` 路径，会继续尝试这些候选位置。
 
 ## 本地构建与验证
 
@@ -226,7 +240,7 @@ print(try await restoredHandle.status().name)
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.4
+./scripts/make-xcframework.sh 0.2.5
 ```
 
 验证 local-binary mode：
@@ -241,7 +255,7 @@ print(try await restoredHandle.status().name)
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-运行本地 benchmark demo（v0.2.4 P0-0）：
+运行本地 benchmark demo（v0.2.5 P0-0）：
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -274,7 +288,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.4
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.5
 ```
 
 ## Release 与 SwiftPM 的关系

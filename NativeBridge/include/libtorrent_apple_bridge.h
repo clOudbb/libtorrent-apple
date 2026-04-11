@@ -219,6 +219,20 @@ bool libtorrent_apple_session_apply_configuration(
     libtorrent_apple_error_t *error_out
 );
 
+bool libtorrent_apple_session_reopen_network_sockets(
+    libtorrent_apple_session_t *session,
+    bool reopen_map_ports,
+    libtorrent_apple_error_t *error_out
+);
+
+bool libtorrent_apple_session_get_listen_state(
+    libtorrent_apple_session_t *session,
+    bool *is_listening_out,
+    int32_t *listen_port_out,
+    int32_t *ssl_listen_port_out,
+    libtorrent_apple_error_t *error_out
+);
+
 void libtorrent_apple_session_destroy(libtorrent_apple_session_t *session);
 
 bool libtorrent_apple_session_add_magnet(

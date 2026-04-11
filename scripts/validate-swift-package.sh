@@ -26,8 +26,12 @@ case "${MODE}" in
         run_mode local-binary
         run_mode remote-binary
         ;;
+    all-local)
+        run_mode source
+        run_mode local-binary
+        ;;
     *)
-        echo "usage: scripts/validate-swift-package.sh [source|local-binary|remote-binary|all]" >&2
+        echo "usage: scripts/validate-swift-package.sh [source|local-binary|remote-binary|all|all-local]" >&2
         exit 1
         ;;
 esac

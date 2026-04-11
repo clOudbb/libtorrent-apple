@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.4")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.5")
 ```
 
 Then import:
@@ -161,6 +161,8 @@ _ = try await session.handleNetworkPathChanged()
 _ = try await session.handleSystemWakeupDetected()
 ```
 
+`handleNetworkPathChanged()` and `handleSystemWakeupDetected()` reopen libtorrent network sockets before reannounce whenever the native bridge supports it. On iOS, downstream apps should call these from `NWPathMonitor` updates and wake callbacks. The default `SessionConfiguration` listen interfaces are now explicit dual-stack bindings: `0.0.0.0:0,[::]:0`.
+
 ### 7. Runtime Transport Behavior Controls (uTP/TCP)
 
 ```swift
@@ -263,6 +265,13 @@ This version already includes:
 - deferred session configuration apply and batch reannounce recovery hooks
 - runtime uTP/TCP transport behavior control hooks
 
+## HTTPS Trackers and TLS Backend
+
+- v0.2.5 release builds default to the `OpenSSL` HTTPS tracker backend.
+- Check `LibtorrentApple.backendInfo.supportsHTTPSTrackers` to confirm capability at runtime.
+- Regression tests cover the `unsupported_url_protocol` failure mode for `https://.../announce` tracker URLs.
+- Local release builds auto-discover Apple-platform OpenSSL inputs from a local `OpenSSL-Universal` checkout or SwiftPM cache when explicit `OPENSSL_*` paths are not provided.
+
 ## Build and Validate Locally
 
 ### Package Modes and Recommendation
@@ -303,7 +312,7 @@ Build the Apple frameworks:
 ./scripts/sync-libtorrent.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.4
+./scripts/make-xcframework.sh 0.2.5
 ```
 
 Validate local binary mode:
@@ -318,7 +327,7 @@ Validate remote binary mode:
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-Run the local benchmark demo (v0.2.4 P0-0):
+Run the local benchmark demo (v0.2.5 P0-0):
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -387,7 +396,7 @@ LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.4
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.5
 ```
 
 ## Release Model

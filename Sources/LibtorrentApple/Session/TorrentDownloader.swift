@@ -127,6 +127,11 @@ public actor TorrentDownloader {
     }
 
     @discardableResult
+    public func reopenNetworkSockets(remapPorts: Bool = true) async throws -> Bool {
+        try await sessionStorage.reopenNetworkSockets(remapPorts: remapPorts)
+    }
+
+    @discardableResult
     public func handleNetworkPathChanged() async throws -> Int {
         try await sessionStorage.handleNetworkPathChanged()
     }

@@ -13,10 +13,24 @@ fi
 
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentApple}"
 FRAMEWORK_DIR="${FRAMEWORK_DIR:-${ROOT_DIR}/Build/apple/macosx/${FRAMEWORK_NAME}.framework}"
+FRAMEWORK_BINARY_PATH="${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
 
 if [[ ! -d "${FRAMEWORK_DIR}" ]]; then
     echo "error: framework not found at ${FRAMEWORK_DIR}. Run scripts/build-apple-libs.sh first." >&2
     exit 1
+fi
+
+if [[ ! -f "${FRAMEWORK_BINARY_PATH}" ]]; then
+    echo "error: framework binary not found at ${FRAMEWORK_BINARY_PATH}" >&2
+    exit 1
+fi
+
+FRAMEWORK_ARCHS="$(xcrun lipo -archs "${FRAMEWORK_BINARY_PATH}")"
+HOST_ARCH="$(uname -m)"
+TEST_ARCH="${HOST_ARCH}"
+
+if ! printf '%s\n' "${FRAMEWORK_ARCHS}" | tr ' ' '\n' | grep -qx "${HOST_ARCH}"; then
+    TEST_ARCH="${FRAMEWORK_ARCHS%% *}"
 fi
 
 tmpdir="$(mktemp -d /tmp/libtorrent-apple-smoke.XXXXXX)"
@@ -52,6 +66,7 @@ int main(void) {
 EOF
 
 clang++ \
+    -arch "${TEST_ARCH}" \
     "${tmpdir}/smoke.cpp" \
     -o "${tmpdir}/smoke" \
     -F"$(dirname "${FRAMEWORK_DIR}")" \
@@ -62,6 +77,10 @@ clang++ \
     -framework SystemConfiguration \
     -I"${FRAMEWORK_DIR}/Headers"
 
-"${tmpdir}/smoke"
+if [[ "${TEST_ARCH}" == "${HOST_ARCH}" ]]; then
+    "${tmpdir}/smoke"
+else
+    arch "-${TEST_ARCH}" "${tmpdir}/smoke"
+fi
 
 echo "macOS framework smoke test passed for ${FRAMEWORK_DIR}"

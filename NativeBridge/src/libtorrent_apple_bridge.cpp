@@ -210,6 +210,17 @@ bool validate_tracker_updates(
     return true;
 }
 
+int32_t clamp_int32(std::int64_t value)
+{
+    if (value > std::numeric_limits<int32_t>::max()) {
+        return std::numeric_limits<int32_t>::max();
+    }
+    if (value < std::numeric_limits<int32_t>::min()) {
+        return std::numeric_limits<int32_t>::min();
+    }
+    return static_cast<int32_t>(value);
+}
+
 std::string trim_copy(std::string value)
 {
     auto const is_space = [](unsigned char character) {
@@ -1623,6 +1634,57 @@ bool libtorrent_apple_session_apply_configuration(
     }
 }
 
+bool libtorrent_apple_session_reopen_network_sockets(
+    libtorrent_apple_session_t *session,
+    bool reopen_map_ports,
+    libtorrent_apple_error_t *error_out
+)
+{
+    clear_error(error_out);
+
+    if (session == nullptr || session->handle == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    try {
+        lt::reopen_network_flags_t const options = reopen_map_ports
+            ? lt::session_handle::reopen_map_ports
+            : lt::reopen_network_flags_t{};
+        session->handle->reopen_network_sockets(options);
+        return true;
+    } catch (std::exception const &exception) {
+        return fail(error_out, -2, exception.what());
+    }
+}
+
+bool libtorrent_apple_session_get_listen_state(
+    libtorrent_apple_session_t *session,
+    bool *is_listening_out,
+    int32_t *listen_port_out,
+    int32_t *ssl_listen_port_out,
+    libtorrent_apple_error_t *error_out
+)
+{
+    clear_error(error_out);
+
+    if (session == nullptr || session->handle == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (is_listening_out == nullptr || listen_port_out == nullptr || ssl_listen_port_out == nullptr) {
+        return fail(error_out, -1, "listen state outputs must not be null");
+    }
+
+    try {
+        *is_listening_out = session->handle->is_listening();
+        *listen_port_out = clamp_int32(session->handle->listen_port());
+        *ssl_listen_port_out = clamp_int32(session->handle->ssl_listen_port());
+        return true;
+    } catch (std::exception const &exception) {
+        return fail(error_out, -2, exception.what());
+    }
+}
+
 bool libtorrent_apple_session_add_magnet(
     libtorrent_apple_session_t *session,
     char const *magnet_uri,
@@ -1898,16 +1960,6 @@ bool libtorrent_apple_session_get_stats(
     if (session == nullptr || session->handle == nullptr) {
         return fail(error_out, -1, "session must not be null");
     }
-
-    auto const clamp_int32 = [](std::int64_t value) {
-        if (value > std::numeric_limits<int32_t>::max()) {
-            return std::numeric_limits<int32_t>::max();
-        }
-        if (value < std::numeric_limits<int32_t>::min()) {
-            return std::numeric_limits<int32_t>::min();
-        }
-        return static_cast<int32_t>(value);
-    };
 
     try {
         lt::session_status const session_status = session->handle->status();

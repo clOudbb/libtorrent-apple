@@ -6,6 +6,9 @@ public struct TorrentSessionDiagnostics: Sendable, Hashable, Codable {
     public var totalSeeds: Int
     public var isDHTEnabled: Bool
     public var dhtNodeCount: Int
+    public var isListening: Bool?
+    public var listenPort: Int?
+    public var sslListenPort: Int?
 
     public init(
         aggregateDownloadRateBytesPerSecond: Int64,
@@ -14,7 +17,10 @@ public struct TorrentSessionDiagnostics: Sendable, Hashable, Codable {
         totalPeers: Int,
         totalSeeds: Int,
         isDHTEnabled: Bool,
-        dhtNodeCount: Int
+        dhtNodeCount: Int,
+        isListening: Bool? = nil,
+        listenPort: Int? = nil,
+        sslListenPort: Int? = nil
     ) {
         self.aggregateDownloadRateBytesPerSecond = aggregateDownloadRateBytesPerSecond
         self.aggregateUploadRateBytesPerSecond = aggregateUploadRateBytesPerSecond
@@ -23,5 +29,8 @@ public struct TorrentSessionDiagnostics: Sendable, Hashable, Codable {
         self.totalSeeds = totalSeeds
         self.isDHTEnabled = isDHTEnabled
         self.dhtNodeCount = dhtNodeCount
+        self.isListening = isListening
+        self.listenPort = listenPort
+        self.sslListenPort = sslListenPort
     }
 }

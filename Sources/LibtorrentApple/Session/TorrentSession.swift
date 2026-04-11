@@ -24,6 +24,11 @@ private struct ThroughputOptimizerRuntimeState: Sendable {
     var lastActionAt: Date?
 }
 
+private struct RehydrationSeed: Sendable {
+    let tracked: TrackedTorrent
+    let nativeResumeData: Data?
+}
+
 public actor TorrentSession {
     public private(set) var configuration: SessionConfiguration
     public private(set) var isRunning = false
@@ -688,25 +693,82 @@ public actor TorrentSession {
     }
 
     @discardableResult
-    public func handleNetworkPathChanged() throws -> Int {
+    public func reopenNetworkSockets(remapPorts: Bool = true) throws -> Bool {
+        let session = try requireRunningSession()
+
+        do {
+            if try BridgeRuntime.reopenNetworkSockets(session: session, remapPorts: remapPorts) {
+                emitAlert(
+                    .nativeEvent,
+                    nativeEventName: "session_network_sockets_reopened",
+                    message: "Reopened network sockets."
+                )
+                return true
+            }
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_network_sockets_reopen_failed",
+                message: "Native socket reopen failed: \(error.localizedDescription). Falling back to session rebuild."
+            )
+        }
+
+        try rebuildNativeSession()
+        emitAlert(
+            .nativeEvent,
+            nativeEventName: "session_network_sockets_rebuilt",
+            message: "Native socket reopen unavailable; rebuilt the session to refresh network sockets."
+        )
+        return false
+    }
+
+    @discardableResult
+    func recoverNetworkAndReannounce(
+        nativeEventName: String,
+        triggerDescription: String,
+        recovery: () throws -> Bool
+    ) throws -> Int {
+        let recoveryMessage: String
+
+        do {
+            let reopenedNatively = try recovery()
+            recoveryMessage = reopenedNatively
+                ? "reopened network sockets and triggered batch reannounce."
+                : "rebuilt the session and triggered batch reannounce."
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "\(nativeEventName)_socket_recovery_failed",
+                message: "\(triggerDescription); network socket recovery failed: \(error.localizedDescription). Continuing with batch reannounce on the existing session."
+            )
+            recoveryMessage = "network socket recovery failed; continued with batch reannounce on the existing session."
+        }
+
         let succeeded = try reannounceAllTorrents(after: 0, ignoreMinimumInterval: true)
         emitAlert(
             .nativeEvent,
-            nativeEventName: "session_network_path_changed",
-            message: "Network path changed; triggered batch reannounce."
+            nativeEventName: nativeEventName,
+            message: "\(triggerDescription); \(recoveryMessage)"
         )
         return succeeded
     }
 
     @discardableResult
-    public func handleSystemWakeupDetected() throws -> Int {
-        let succeeded = try reannounceAllTorrents(after: 0, ignoreMinimumInterval: true)
-        emitAlert(
-            .nativeEvent,
-            nativeEventName: "session_system_wakeup_detected",
-            message: "System wakeup detected; triggered batch reannounce."
+    public func handleNetworkPathChanged() throws -> Int {
+        try recoverNetworkAndReannounce(
+            nativeEventName: "session_network_path_changed",
+            triggerDescription: "Network path changed",
+            recovery: { try reopenNetworkSockets(remapPorts: true) }
         )
-        return succeeded
+    }
+
+    @discardableResult
+    public func handleSystemWakeupDetected() throws -> Int {
+        try recoverNetworkAndReannounce(
+            nativeEventName: "session_system_wakeup_detected",
+            triggerDescription: "System wakeup detected",
+            recovery: { try reopenNetworkSockets(remapPorts: true) }
+        )
     }
 
     @discardableResult
@@ -895,6 +957,7 @@ public actor TorrentSession {
     public func sessionDiagnostics() throws -> TorrentSessionDiagnostics {
         let session = try requireRunningSession()
         let nativeStats = try BridgeRuntime.sessionStats(session: session)
+        let listenState = try BridgeRuntime.listenState(session: session)
         return TorrentSessionDiagnostics(
             aggregateDownloadRateBytesPerSecond: nativeStats.downloadRateBytesPerSecond,
             aggregateUploadRateBytesPerSecond: nativeStats.uploadRateBytesPerSecond,
@@ -902,7 +965,10 @@ public actor TorrentSession {
             totalPeers: nativeStats.totalPeers,
             totalSeeds: nativeStats.totalSeeds,
             isDHTEnabled: nativeStats.isDHTEnabled,
-            dhtNodeCount: nativeStats.dhtNodeCount
+            dhtNodeCount: nativeStats.dhtNodeCount,
+            isListening: listenState?.isListening,
+            listenPort: listenState?.listenPort,
+            sslListenPort: listenState?.sslListenPort
         )
     }
 
@@ -1123,22 +1189,52 @@ public actor TorrentSession {
         }
     }
 
-    private func rehydrateTrackedTorrents() throws {
+    private func makeRehydrationSeeds(from previousSession: BridgeSessionHandle?) -> [RehydrationSeed] {
+        torrents
+            .sorted { lhs, rhs in
+                lhs.value.addedAt < rhs.value.addedAt
+            }
+            .map { id, tracked in
+                let nativeResumeData: Data?
+                if let previousSession {
+                    nativeResumeData = try? BridgeRuntime.exportNativeResumeData(session: previousSession, id: id)
+                } else {
+                    nativeResumeData = nil
+                }
+
+                return RehydrationSeed(
+                    tracked: tracked,
+                    nativeResumeData: nativeResumeData
+                )
+            }
+    }
+
+    private func rehydrateTrackedTorrents(from previousSession: BridgeSessionHandle? = nil) throws {
         guard !torrents.isEmpty, let nativeSession else {
             return
         }
 
-        let existingTorrents = torrents.sorted { lhs, rhs in
-            lhs.value.addedAt < rhs.value.addedAt
-        }
-
+        let rehydrationSeeds = makeRehydrationSeeds(from: previousSession)
         var rebuilt: [TorrentID: TrackedTorrent] = [:]
-        for (_, tracked) in existingTorrents {
-            let recreatedID = try addNativeTorrent(
-                session: nativeSession,
-                source: tracked.source,
-                downloadDirectory: tracked.downloadDirectory
-            )
+        for seed in rehydrationSeeds {
+            let tracked = seed.tracked
+            let recreatedID: TorrentID
+
+            if let nativeResumeData = seed.nativeResumeData {
+                recreatedID = try BridgeRuntime.addResumeData(
+                    session: nativeSession,
+                    resumeData: nativeResumeData,
+                    downloadPath: try ensureDownloadPath(downloadDirectory: tracked.downloadDirectory)
+                )
+            } else {
+                recreatedID = try addNativeTorrent(
+                    session: nativeSession,
+                    source: tracked.source,
+                    downloadDirectory: tracked.downloadDirectory
+                )
+                applyTrackerPresetIfNeeded(session: nativeSession, torrentID: recreatedID)
+            }
+
             if tracked.state == .paused {
                 try BridgeRuntime.pauseTorrent(session: nativeSession, id: recreatedID)
             }
@@ -1171,7 +1267,7 @@ public actor TorrentSession {
         nativeSession = replacement
 
         do {
-            try rehydrateTrackedTorrents()
+            try rehydrateTrackedTorrents(from: previous)
             isRunning = true
             startNativeAlertPolling()
             BridgeRuntime.destroySession(previous)

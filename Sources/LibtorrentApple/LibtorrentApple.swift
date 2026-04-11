@@ -66,6 +66,12 @@ struct BridgeNativeSessionStats: Sendable, Equatable {
     let dhtNodeCount: Int
 }
 
+struct BridgeNativeListenState: Sendable, Equatable {
+    let isListening: Bool
+    let listenPort: Int
+    let sslListenPort: Int
+}
+
 public enum LibtorrentApple {
     public static let packageName = "LibtorrentApple"
     public static let bridgeVersion = String(cString: libtorrent_apple_bridge_version())
@@ -81,6 +87,14 @@ public enum LibtorrentApple {
 }
 
 enum BridgeRuntime {
+    static var supportsNetworkSocketReopen: Bool {
+        true
+    }
+
+    static var supportsListenStateDiagnostics: Bool {
+        true
+    }
+
     static func requireAvailable() throws {
         guard LibtorrentApple.backendAvailable else {
             throw LibtorrentAppleError.bridgeUnavailable
@@ -288,6 +302,39 @@ enum BridgeRuntime {
             "Session diagnostics are unavailable in the current binary bridge."
         )
         #endif
+    }
+
+    @discardableResult
+    static func reopenNetworkSockets(session: BridgeSessionHandle, remapPorts: Bool = true) throws -> Bool {
+        var nativeError = libtorrent_apple_error_t()
+        guard libtorrent_apple_session_reopen_network_sockets(session, remapPorts, &nativeError) else {
+            throw error(from: nativeError, fallbackMessage: "Failed to reopen network sockets.")
+        }
+
+        return true
+    }
+
+    static func listenState(session: BridgeSessionHandle) throws -> BridgeNativeListenState? {
+        var isListening = false
+        var listenPort: Int32 = 0
+        var sslListenPort: Int32 = 0
+        var nativeError = libtorrent_apple_error_t()
+
+        guard libtorrent_apple_session_get_listen_state(
+            session,
+            &isListening,
+            &listenPort,
+            &sslListenPort,
+            &nativeError
+        ) else {
+            throw error(from: nativeError, fallbackMessage: "Failed to fetch listen state.")
+        }
+
+        return BridgeNativeListenState(
+            isListening: isListening,
+            listenPort: Int(listenPort),
+            sslListenPort: Int(sslListenPort)
+        )
     }
 
     static func popAlert(session: BridgeSessionHandle) throws -> BridgeNativeAlert? {

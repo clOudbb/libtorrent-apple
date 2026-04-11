@@ -16,6 +16,7 @@ if [[ -f "${VERSIONS_FILE}" ]]; then
 fi
 
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentApple}"
+HTTPS_TRACKER_BACKEND="${HTTPS_TRACKER_BACKEND:-openssl}"
 
 DEVICE_FRAMEWORK="${BUILD_DIR}/iphoneos/${FRAMEWORK_NAME}.framework"
 SIMULATOR_FRAMEWORK="${BUILD_DIR}/iphonesimulator/${FRAMEWORK_NAME}.framework"
