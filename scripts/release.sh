@@ -28,6 +28,7 @@ FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentAppleBinary}"
 
 "${SCRIPT_DIR}/validate-swift-package.sh" source
 "${SCRIPT_DIR}/sync-libtorrent.sh"
+"${SCRIPT_DIR}/sync-openssl.sh"
 "${SCRIPT_DIR}/build-apple-libs.sh"
 "${SCRIPT_DIR}/smoke-test-macos-framework.sh"
 "${SCRIPT_DIR}/make-xcframework.sh" "${VERSION}"
@@ -51,6 +52,7 @@ if ! command -v gh >/dev/null 2>&1; then
     echo "Checksum: ${CHECKSUM}"
     echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
     echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
+    echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
     exit 0
 fi
 
@@ -64,6 +66,7 @@ if [[ -z "${GH_TOKEN:-}" ]]; then
     echo "Checksum: ${CHECKSUM}"
     echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
     echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
+    echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
     exit 0
 fi
 
@@ -92,3 +95,4 @@ echo "Artifact: ${ZIP_PATH}"
 echo "Checksum: ${CHECKSUM}"
 echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
 echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
+echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"

@@ -203,10 +203,11 @@ _ = try await downloader.handleSystemWakeupDetected()
 
 ## HTTPS Tracker 与 TLS Backend
 
-- `v0.2.5` release 构建默认启用 `OpenSSL` HTTPS tracker backend。
+- `libtorrent-apple` 现在只支持 `OpenSSL` 这一条 HTTPS tracker backend。
 - 运行时可通过 `LibtorrentApple.backendInfo.supportsHTTPSTrackers` 确认能力位。
 - 回归测试已覆盖 `https://.../announce` tracker URL 不再落入 `unsupported_url_protocol`。
-- 本地 release 构建会优先从本地 `OpenSSL-Universal` checkout 或 SwiftPM cache 自动发现 Apple 平台 OpenSSL 输入；若未显式传入 `OPENSSL_*` 路径，会继续尝试这些候选位置。
+- release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物。
+- 本地 release 构建仍支持显式传入 `OPENSSL_*` 路径；若未显式传入，也会继续尝试本地 `OpenSSL-Universal` checkout 或 SwiftPM cache。
 
 ## 本地构建与验证
 
@@ -238,6 +239,7 @@ _ = try await downloader.handleSystemWakeupDetected()
 
 ```bash
 ./scripts/sync-libtorrent.sh
+./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
 ./scripts/make-xcframework.sh 0.2.5
@@ -275,7 +277,7 @@ demo 会输出：
 - `summary.json`
 - `samples.json`
 
-## 指定其他 libtorrent 版本构建
+## 指定其他 upstream 版本构建
 
 默认会使用 `scripts/versions.env` 里固定的 upstream 版本，这样构建更可复现。
 
@@ -283,12 +285,20 @@ demo 会输出：
 
 ```bash
 LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
+OPENSSL_REF=latest ./scripts/sync-openssl.sh
 ```
 
 如果你想临时指定某个版本：
 
 ```bash
 LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.5
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.5
+```
+
+如果你想在一次 release 构建里同时追两者最新版本：
+
+```bash
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.5
 ```
 
 ## Release 与 SwiftPM 的关系

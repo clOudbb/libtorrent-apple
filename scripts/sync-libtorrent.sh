@@ -4,8 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VENDOR_DIR="${ROOT_DIR}/Vendor"
-SOURCE_DIR="${VENDOR_DIR}/libtorrent"
+VENDOR_DIR="${VENDOR_DIR:-${ROOT_DIR}/Vendor}"
+SOURCE_DIR="${LIBTORRENT_SOURCE_DIR:-${VENDOR_DIR}/libtorrent}"
 VERSIONS_FILE="${SCRIPT_DIR}/versions.env"
 
 if [[ -f "${VERSIONS_FILE}" ]]; then

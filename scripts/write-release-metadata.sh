@@ -7,7 +7,10 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSIONS_FILE="${SCRIPT_DIR}/versions.env"
 ARTIFACTS_DIR="${ROOT_DIR}/Artifacts/release"
 PACKAGE_SUPPORT_DIR="${ROOT_DIR}/PackageSupport"
-SOURCE_METADATA_FILE="${ROOT_DIR}/Vendor/libtorrent/.bootstrap-source"
+LIBTORRENT_SOURCE_DIR="${LIBTORRENT_SOURCE_DIR:-${ROOT_DIR}/Vendor/libtorrent}"
+OPENSSL_SOURCE_DIR="${OPENSSL_SOURCE_DIR:-${ROOT_DIR}/Vendor/OpenSSL}"
+SOURCE_METADATA_FILE="${LIBTORRENT_SOURCE_DIR}/.bootstrap-source"
+OPENSSL_SOURCE_METADATA_FILE="${OPENSSL_SOURCE_DIR}/.bootstrap-source"
 VERSION_INPUT="${1:-}"
 
 if [[ -z "${VERSION_INPUT}" ]]; then
@@ -40,6 +43,11 @@ set +a
 if [[ -f "${SOURCE_METADATA_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${SOURCE_METADATA_FILE}"
+fi
+
+if [[ -f "${OPENSSL_SOURCE_METADATA_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${OPENSSL_SOURCE_METADATA_FILE}"
 fi
 
 resolve_repo_slug() {
@@ -130,9 +138,13 @@ cat > "${RELEASE_NOTES_PATH}" <<EOF
 ## Upstream Source
 
 - libtorrent repo: ${LIBTORRENT_REPO_URL:-unknown}
-- requested ref: ${LIBTORRENT_REF_REQUESTED:-unknown}
-- resolved ref: ${LIBTORRENT_REF_RESOLVED:-unknown}
-- commit: ${LIBTORRENT_COMMIT_SHA:-unknown}
+- libtorrent requested ref: ${LIBTORRENT_REF_REQUESTED:-unknown}
+- libtorrent resolved ref: ${LIBTORRENT_REF_RESOLVED:-unknown}
+- libtorrent commit: ${LIBTORRENT_COMMIT_SHA:-unknown}
+- OpenSSL repo: ${OPENSSL_REPO_URL:-unknown}
+- OpenSSL requested ref: ${OPENSSL_REF_REQUESTED:-unknown}
+- OpenSSL resolved ref: ${OPENSSL_REF_RESOLVED:-unknown}
+- OpenSSL commit: ${OPENSSL_COMMIT_SHA:-unknown}
 
 ## Consumer Notes
 

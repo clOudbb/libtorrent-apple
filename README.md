@@ -267,10 +267,11 @@ This version already includes:
 
 ## HTTPS Trackers and TLS Backend
 
-- v0.2.5 release builds default to the `OpenSSL` HTTPS tracker backend.
+- `libtorrent-apple` supports only the `OpenSSL` HTTPS tracker backend.
 - Check `LibtorrentApple.backendInfo.supportsHTTPSTrackers` to confirm capability at runtime.
 - Regression tests cover the `unsupported_url_protocol` failure mode for `https://.../announce` tracker URLs.
-- Local release builds auto-discover Apple-platform OpenSSL inputs from a local `OpenSSL-Universal` checkout or SwiftPM cache when explicit `OPENSSL_*` paths are not provided.
+- Release builds sync and pin `OpenSSL-Universal` from `https://github.com/krzyzanowskim/OpenSSL.git` by default.
+- Local release builds still support explicit `OPENSSL_*` paths and fall back to a local `OpenSSL-Universal` checkout or SwiftPM cache when needed.
 
 ## Build and Validate Locally
 
@@ -310,6 +311,7 @@ Build the Apple frameworks:
 
 ```bash
 ./scripts/sync-libtorrent.sh
+./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
 ./scripts/make-xcframework.sh 0.2.5
@@ -382,21 +384,29 @@ Run a simplified one-shot same-condition comparison (reference only, no gate thr
   --tracker-file /tmp/benchmark-trackers.txt
 ```
 
-## Build Against a Different libtorrent Version
+## Build Against Different Upstream Versions
 
-By default the repo builds from the pinned version in `scripts/versions.env`.
+By default the repo builds from the pinned upstream versions in `scripts/versions.env`.
 That keeps builds reproducible.
 
 Use the latest upstream release tag:
 
 ```bash
 LIBTORRENT_REF=latest ./scripts/sync-libtorrent.sh
+OPENSSL_REF=latest ./scripts/sync-openssl.sh
 ```
 
 Use a specific upstream tag for one build:
 
 ```bash
 LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.5
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.5
+```
+
+Override both dependencies in one release build:
+
+```bash
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.5
 ```
 
 ## Release Model

@@ -6,10 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSIONS_FILE="${SCRIPT_DIR}/versions.env"
 SOURCE_DIR="${LIBTORRENT_SOURCE_DIR:-${ROOT_DIR}/Vendor/libtorrent}"
+OPENSSL_SOURCE_DIR="${OPENSSL_SOURCE_DIR:-${ROOT_DIR}/Vendor/OpenSSL}"
 BOOST_VENDOR_DIR="${BOOST_VENDOR_DIR:-${ROOT_DIR}/Vendor/boost}"
 BUILD_DIR="${ROOT_DIR}/Build/apple"
 CONFIGURATION="${CONFIGURATION:-Release}"
 SOURCE_METADATA_FILE="${SOURCE_DIR}/.bootstrap-source"
+OPENSSL_SOURCE_METADATA_FILE="${OPENSSL_SOURCE_DIR}/.bootstrap-source"
 NATIVE_BRIDGE_DIR="${ROOT_DIR}/NativeBridge"
 SDKS=(iphoneos iphonesimulator macosx)
 
@@ -30,6 +32,11 @@ IPHONEOS_ARCHS="${IPHONEOS_ARCHS:-arm64}"
 IPHONESIMULATOR_ARCHS="${IPHONESIMULATOR_ARCHS:-arm64 x86_64}"
 MACOSX_ARCHS="${MACOSX_ARCHS:-arm64 x86_64}"
 
+if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then
+    echo "error: only HTTPS_TRACKER_BACKEND=openssl is supported." >&2
+    exit 1
+fi
+
 if [[ ! -d "${SOURCE_DIR}" ]]; then
     echo "error: libtorrent source not found at ${SOURCE_DIR}. Run scripts/sync-libtorrent.sh first." >&2
     exit 1
@@ -43,6 +50,11 @@ fi
 if [[ -f "${SOURCE_METADATA_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${SOURCE_METADATA_FILE}"
+fi
+
+if [[ -f "${OPENSSL_SOURCE_METADATA_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${OPENSSL_SOURCE_METADATA_FILE}"
 fi
 
 require_command() {
@@ -167,10 +179,6 @@ prepare_local_openssl_support() {
     local repo_head
     local extraction_root
 
-    if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then
-        return
-    fi
-
     if [[ "${OPENSSL_SUPPORT_PREPARED}" == "1" ]]; then
         return
     fi
@@ -193,6 +201,7 @@ prepare_local_openssl_support() {
     fi
 
     for candidate in \
+        "${OPENSSL_SOURCE_DIR}" \
         "${ROOT_DIR}/Vendor/OpenSSL" \
         "${ROOT_DIR}/Vendor/OpenSSL-Universal" \
         "${HOME}/Library/Caches/org.swift.swiftpm/repositories"/OpenSSL-*; do
@@ -237,10 +246,6 @@ configure_crypto_backend_for_sdk() {
     CURRENT_OPENSSL_SSL_LIBRARY=""
     CURRENT_OPENSSL_CRYPTO_LIBRARY=""
     CURRENT_EXTRA_ARCHIVES=()
-
-    if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then
-        return
-    fi
 
     sdk_suffix="$(sdk_env_suffix "${sdk}")"
 
@@ -415,36 +420,13 @@ build_libtorrent_for_sdk() {
         -DBoost_NO_BOOST_CMAKE=ON
     )
 
-    if [[ "${HTTPS_TRACKER_BACKEND}" == "openssl" ]]; then
-        cmake_args+=(
-            -DOPENSSL_USE_STATIC_LIBS=TRUE
-            -DOPENSSL_INCLUDE_DIR="${CURRENT_OPENSSL_INCLUDE_DIR}"
-            -DOPENSSL_SSL_LIBRARY="${CURRENT_OPENSSL_SSL_LIBRARY}"
-            -DOPENSSL_CRYPTO_LIBRARY="${CURRENT_OPENSSL_CRYPTO_LIBRARY}"
-        )
-    fi
-
-    case "${HTTPS_TRACKER_BACKEND}" in
-        auto)
-            ;;
-        openssl)
-            cmake_args+=(-Dgnutls=OFF)
-            ;;
-        gnutls)
-            cmake_args+=(-Dgnutls=ON)
-            ;;
-        disabled)
-            cmake_args+=(
-                -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
-                -DCMAKE_DISABLE_FIND_PACKAGE_GnuTLS=TRUE
-                -DCMAKE_DISABLE_FIND_PACKAGE_LibGcrypt=TRUE
-            )
-            ;;
-        *)
-            echo "error: HTTPS_TRACKER_BACKEND must be one of: auto|openssl|gnutls|disabled" >&2
-            exit 1
-            ;;
-    esac
+    cmake_args+=(
+        -DOPENSSL_USE_STATIC_LIBS=TRUE
+        -DOPENSSL_INCLUDE_DIR="${CURRENT_OPENSSL_INCLUDE_DIR}"
+        -DOPENSSL_SSL_LIBRARY="${CURRENT_OPENSSL_SSL_LIBRARY}"
+        -DOPENSSL_CRYPTO_LIBRARY="${CURRENT_OPENSSL_CRYPTO_LIBRARY}"
+        -Dgnutls=OFF
+    )
 
     if [[ "${sdk}" == iphoneos || "${sdk}" == iphonesimulator ]]; then
         cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS)
@@ -498,25 +480,10 @@ build_bridge_archive_for_sdk() {
             ;;
     esac
 
-    case "${HTTPS_TRACKER_BACKEND}" in
-        openssl)
-            bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1)
-            if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" ]]; then
-                bridge_cflags+=(-I"${CURRENT_OPENSSL_INCLUDE_DIR}")
-            fi
-            ;;
-        gnutls)
-            bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_GNUTLS=1)
-            ;;
-        auto)
-            if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" && -n "${CURRENT_OPENSSL_SSL_LIBRARY}" && -n "${CURRENT_OPENSSL_CRYPTO_LIBRARY}" ]]; then
-                bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1 -I"${CURRENT_OPENSSL_INCLUDE_DIR}")
-            fi
-            ;;
-        disabled)
-            bridge_cflags+=(-DTORRENT_USE_SSL=0)
-            ;;
-    esac
+    bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1)
+    if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" ]]; then
+        bridge_cflags+=(-I"${CURRENT_OPENSSL_INCLUDE_DIR}")
+    fi
 
     for arch in "${archs[@]}"; do
         local object_path="${bridge_dir}/${FRAMEWORK_NAME}_${arch}.o"
@@ -663,6 +630,10 @@ BOOST_INCLUDE_DIR=${BOOST_INCLUDE_DIR_USED}
 REQUIRED_SYSTEM_FRAMEWORKS=CFNetwork,CoreFoundation,Security,SystemConfiguration
 REQUIRED_LINK_LIBRARIES=libc++
 HTTPS_TRACKER_BACKEND=${HTTPS_TRACKER_BACKEND}
+OPENSSL_REPO_URL=${OPENSSL_REPO_URL:-unknown}
+OPENSSL_REF_REQUESTED=${OPENSSL_REF_REQUESTED:-unknown}
+OPENSSL_REF_RESOLVED=${OPENSSL_REF_RESOLVED:-unknown}
+OPENSSL_COMMIT_SHA=${OPENSSL_COMMIT_SHA:-unknown}
 EOF
 }
 
