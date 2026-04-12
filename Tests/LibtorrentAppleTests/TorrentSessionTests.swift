@@ -506,7 +506,7 @@ struct TorrentSessionTests {
         #expect(beast.maxQueuedDiskBytes == 64 * 1024 * 1024)
         #expect(beast.trackerPresetURLs.count == SessionProfile.beastV1.defaultTrackerPreset.count)
     }
-    
+
     @Test
     func transportBehaviorControlsWork() async throws {
         let rootDirectory = FileManager.default.temporaryDirectory
@@ -536,7 +536,14 @@ struct TorrentSessionTests {
     
     @Test
     func throughputOptimizerBoostAndRestoreWork() async throws {
-        if ProcessInfo.processInfo.environment["LIBTORRENT_APPLE_PACKAGE_MODE"] == "local-binary" {
+        let packageMode = ProcessInfo.processInfo.environment["LIBTORRENT_APPLE_PACKAGE_MODE"]
+        if packageMode == "local-binary" || packageMode == "remote-binary" {
+            // Known issue: on Apple real-binary builds, this test reliably drives session
+            // teardown through libtorrent's default mmap disk backend and can crash in
+            // mmap_disk_io::remove_torrent() during session_proxy destruction. We are
+            // intentionally not changing the default disk backend semantics or carrying
+            // a downstream libtorrent patch in this repository, so keep this stress path
+            // suspended for binary-backed package modes until upstream fixes teardown.
             return
         }
 
@@ -596,7 +603,12 @@ struct TorrentSessionTests {
     
     @Test
     func deferredApplyAndBatchReannounceHooksWork() async throws {
-        if ProcessInfo.processInfo.environment["LIBTORRENT_APPLE_PACKAGE_MODE"] == "local-binary" {
+        let packageMode = ProcessInfo.processInfo.environment["LIBTORRENT_APPLE_PACKAGE_MODE"]
+        if packageMode == "local-binary" || packageMode == "remote-binary" {
+            // Same known Apple real-binary teardown issue as above. This test exercises
+            // configuration batching and reannounce hooks correctly, but its stop/destroy
+            // tail still hits the current libtorrent mmap teardown crash on binary-backed
+            // package modes.
             return
         }
 

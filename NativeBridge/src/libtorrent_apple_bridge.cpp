@@ -1565,6 +1565,12 @@ bool libtorrent_apple_session_create(
 
 void libtorrent_apple_session_destroy(libtorrent_apple_session_t *session)
 {
+    // Known issue: on Apple targets, libtorrent's platform-default mmap-backed disk I/O
+    // can crash during teardown in mmap_disk_io::remove_torrent() ->
+    // session_proxy::~session_proxy(). We intentionally keep default session semantics
+    // unchanged here and do not carry a downstream libtorrent patch/fork or force a
+    // different disk backend from this wrapper. If upstream fixes the teardown path,
+    // revisit this destroy implementation together with the suspended real-binary tests.
     delete session;
 }
 
