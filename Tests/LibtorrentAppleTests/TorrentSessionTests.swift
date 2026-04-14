@@ -64,30 +64,6 @@ struct TorrentSessionTests {
     }
     
     @Test
-    func resumeDataRoundTripRestoresState() async throws {
-        let source = TorrentSource.magnetLink(
-            URL(string: "magnet:?xt=urn:btih:89abcdef0123456789abcdef0123456789abcdef")!,
-            displayName: "Example Torrent"
-        )
-    
-        let session = TorrentSession(configuration: SessionConfiguration(userAgent: "tests/1.0"))
-        try await session.start()
-        let added = try await session.addTorrent(from: source)
-        _ = try await session.pauseTorrent(id: added.id)
-    
-        let exported = try await session.exportResumeData()
-    
-        let restoredSession = TorrentSession()
-        try await restoredSession.restoreResumeData(from: exported)
-    
-        let statuses = await restoredSession.allTorrentStatuses()
-        #expect(statuses.count == 1)
-        #expect(statuses.first?.name == "Example Torrent")
-        #expect(statuses.first?.state == .paused)
-        #expect(await restoredSession.configuration.userAgent == "tests/1.0")
-    }
-    
-    @Test
     func nativeResumeDataExportReturnsBytes() async throws {
         let session = TorrentSession()
         try await session.start()
@@ -264,7 +240,7 @@ struct TorrentSessionTests {
     }
     
     @Test
-    func torrentDownloaderSupportsEncodedTorrentAndSnapshots() async throws {
+    func torrentDownloaderSupportsEncodedTorrentAndManagedFiles() async throws {
         let rootDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("LibtorrentAppleDownloaderTests-\(UUID().uuidString)", isDirectory: true)
     
@@ -289,18 +265,49 @@ struct TorrentSessionTests {
         let defaultSaveDirectory = await downloader.defaultSaveDirectory()
         let saveDirectory = try await downloader.saveDirectory(for: handle)
         let stats = await downloader.totalStats()
-        let snapshotURL = try await downloader.persistResumeSnapshot()
-        let persistedSnapshots = try await downloader.persistedResumeSnapshots()
         let managedTorrentFiles = try await downloader.managedTorrentFiles()
         let fetchedTorrent = try await downloader.fetchTorrent(from: managedTorrentFiles[0])
-    
+
         #expect(status.name == "Episode 01")
         #expect(saveDirectory == defaultSaveDirectory)
         #expect(stats.torrentCount == 1)
         #expect((0...1).contains(stats.runningTorrentCount))
-        #expect(persistedSnapshots.contains(snapshotURL))
         #expect(managedTorrentFiles.count == 1)
         #expect(fetchedTorrent.data == encodedTorrent.data)
+    }
+
+    @Test
+    func stoppedDownloaderConfigurationChangesMarkPersistentStateDirty() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleStoppedConfigDirty-\(UUID().uuidString)", isDirectory: true)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory, userAgent: "tests/original"),
+            rootDirectory: rootDirectory
+        )
+
+        let initialManifestURL = try await downloader.savePersistentState()
+        #expect(FileManager.default.fileExists(atPath: initialManifestURL.path))
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        var updatedConfiguration = await downloader.configuration
+        updatedConfiguration.userAgent = "tests/updated"
+        updatedConfiguration.activeDownloadsLimit = 3
+        try await downloader.applyConfiguration(updatedConfiguration)
+
+        #expect(await downloader.hasPendingPersistentStateChanges())
+
+        let flushedURL = try await downloader.flushScheduledPersistentStateSave()
+        #expect(flushedURL != nil)
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        let manifestData = try Data(contentsOf: try #require(flushedURL))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+
+        #expect(manifest.configuration.userAgent == "tests/updated")
+        #expect(manifest.configuration.activeDownloadsLimit == 3)
     }
     
     @Test
@@ -347,7 +354,12 @@ struct TorrentSessionTests {
         try await handle.forceReannounce(after: 0, ignoreMinimumInterval: true)
     
         let moved = try await handle.moveStorage(to: movedDirectory, strategy: .replaceExisting)
-        let saveDirectory = try await handle.downloadDirectory()
+        let saveDirectoryBeforeCompletion = try await handle.downloadDirectory()
+        let saveDirectory = try await waitForDownloadDirectory(
+            on: handle,
+            expectedDirectory: movedDirectory,
+            timeoutSeconds: 2
+        )
     
         try await handle.setPiecePriority(.top, at: 0)
         let updatedPiecePriorities = try await handle.piecePriorities()
@@ -372,6 +384,7 @@ struct TorrentSessionTests {
         )
     
         #expect(moved == movedDirectory)
+        #expect(saveDirectoryBeforeCompletion == rootDirectory)
         #expect(saveDirectory == movedDirectory)
         #expect(updatedPiecePriorities == [.top])
         #expect(replacedTrackers.count == 2)
@@ -683,6 +696,301 @@ struct TorrentSessionTests {
         #expect(!FileManager.default.fileExists(atPath: deletedURL.path))
         #expect(pieceSnapshot?.pieces.count == 1)
     }
+
+    @Test
+    func downloaderPersistentStateRoundTripRestoresTorrent() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentApplePersistentState-\(UUID().uuidString)", isDirectory: true)
+        let torrentFileURL = rootDirectory.appendingPathComponent("persistent.torrent")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "persistent.mkv").write(to: torrentFileURL, options: .atomic)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory, userAgent: "tests/persistent"),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+
+        let handle = try await downloader.addTorrent(
+            from: .torrentFile(torrentFileURL, displayName: "Persistent")
+        )
+        _ = try await handle.pause()
+
+        let manifestURL = try await downloader.savePersistentState()
+        let savedStatus = try await handle.status()
+        let persistentResumeURL = persistentStateDirectoryURL(for: rootDirectory)
+            .appendingPathComponent("ResumeData/\(savedStatus.id.rawValue).resume")
+        let persistentTorrentURL = persistentStateDirectoryURL(for: rootDirectory)
+            .appendingPathComponent("TorrentFiles/\(savedStatus.id.rawValue).torrent")
+
+        #expect(FileManager.default.fileExists(atPath: manifestURL.path))
+        #expect(FileManager.default.fileExists(atPath: persistentResumeURL.path))
+        #expect(FileManager.default.fileExists(atPath: persistentTorrentURL.path))
+
+        await downloader.stop()
+
+        let restoredDownloader = TorrentDownloader(rootDirectory: rootDirectory)
+        let report = try await restoredDownloader.restorePersistentState()
+
+        #expect(report.entries.count == 1)
+        #expect(report.restoredCount == 1)
+        #expect(report.failedCount == 0)
+
+        try await restoredDownloader.start()
+        let restoredStatuses = await restoredDownloader.torrentStatuses()
+
+        #expect(restoredStatuses.count == 1)
+        #expect(restoredStatuses[0].name == "Persistent")
+        #expect(restoredStatuses[0].state == .paused)
+        #expect(await restoredDownloader.configuration.userAgent == "tests/persistent")
+    }
+
+    @Test
+    func downloaderPersistentStateFallsBackToTorrentFileWhenResumeDataIsMissing() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentApplePersistentFallback-\(UUID().uuidString)", isDirectory: true)
+        let torrentFileURL = rootDirectory.appendingPathComponent("fallback.torrent")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "fallback.mkv").write(to: torrentFileURL, options: .atomic)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+
+        let handle = try await downloader.addTorrent(
+            from: .torrentFile(torrentFileURL, displayName: "Fallback")
+        )
+        let status = try await handle.status()
+        _ = try await downloader.savePersistentState()
+        await downloader.stop()
+
+        let persistentResumeURL = persistentStateDirectoryURL(for: rootDirectory)
+            .appendingPathComponent("ResumeData/\(status.id.rawValue).resume")
+        try FileManager.default.removeItem(at: persistentResumeURL)
+
+        let restoredDownloader = TorrentDownloader(rootDirectory: rootDirectory)
+        let report = try await restoredDownloader.restorePersistentState()
+
+        #expect(report.entries.count == 1)
+        #expect(report.restoredCount == 0)
+        #expect(report.degradedCount == 1)
+        #expect(report.failedCount == 0)
+
+        try await restoredDownloader.start()
+        #expect((await restoredDownloader.torrentStatuses()).count == 1)
+    }
+
+    @Test
+    func downloaderPersistentStateReturnsFailureWhenAllRestoreInputsAreMissing() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentApplePersistentMissing-\(UUID().uuidString)", isDirectory: true)
+        let torrentFileURL = rootDirectory.appendingPathComponent("missing.torrent")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "missing.mkv").write(to: torrentFileURL, options: .atomic)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+
+        let handle = try await downloader.addTorrent(
+            from: .torrentFile(torrentFileURL, displayName: "Missing")
+        )
+        let status = try await handle.status()
+        _ = try await downloader.savePersistentState()
+        await downloader.stop()
+
+        let persistentDirectory = persistentStateDirectoryURL(for: rootDirectory)
+        try FileManager.default.removeItem(at: persistentDirectory.appendingPathComponent("ResumeData/\(status.id.rawValue).resume"))
+        try FileManager.default.removeItem(at: persistentDirectory.appendingPathComponent("TorrentFiles/\(status.id.rawValue).torrent"))
+        try FileManager.default.removeItem(at: torrentFileURL)
+
+        let restoredDownloader = TorrentDownloader(rootDirectory: rootDirectory)
+        let report = try await restoredDownloader.restorePersistentState()
+
+        #expect(report.entries.count == 1)
+        #expect(report.failedCount == 1)
+        #expect(report.restoredCount == 0)
+        #expect(report.degradedCount == 0)
+
+        try await restoredDownloader.start()
+        #expect((await restoredDownloader.torrentStatuses()).isEmpty)
+    }
+
+    @Test
+    func downloaderPersistentStateRejectsDuplicateTorrentIDsInManifest() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentApplePersistentDuplicateIDs-\(UUID().uuidString)", isDirectory: true)
+        let persistentDirectory = persistentStateDirectoryURL(for: rootDirectory)
+        let duplicateID = TorrentID(rawValue: "0123456789abcdef0123456789abcdef01234567")
+        let addedAt = Date()
+
+        try FileManager.default.createDirectory(at: persistentDirectory, withIntermediateDirectories: true)
+
+        let manifest = PersistentStateManifest(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            torrents: [
+                PersistentStateManifestTorrent(
+                    id: duplicateID,
+                    name: "Duplicate A",
+                    source: .magnetLink(
+                        URL(string: "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!,
+                        displayName: "Duplicate A"
+                    ),
+                    downloadDirectory: rootDirectory,
+                    desiredState: .paused,
+                    addedAt: addedAt,
+                    updatedAt: addedAt,
+                    resumeDataFileName: nil,
+                    torrentFileName: nil
+                ),
+                PersistentStateManifestTorrent(
+                    id: duplicateID,
+                    name: "Duplicate B",
+                    source: .magnetLink(
+                        URL(string: "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!,
+                        displayName: "Duplicate B"
+                    ),
+                    downloadDirectory: rootDirectory,
+                    desiredState: .running,
+                    addedAt: addedAt,
+                    updatedAt: addedAt,
+                    resumeDataFileName: nil,
+                    torrentFileName: nil
+                ),
+            ]
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(
+            to: persistentDirectory.appendingPathComponent("manifest.json"),
+            options: .atomic
+        )
+
+        let downloader = TorrentDownloader(rootDirectory: rootDirectory)
+
+        do {
+            _ = try await downloader.restorePersistentState()
+            Issue.record("Expected duplicate torrent ids in manifest to throw.")
+        } catch let error as LibtorrentAppleError {
+            guard case let .resumeDataDecodingFailed(message) = error else {
+                Issue.record("Expected resumeDataDecodingFailed, got \(error).")
+                return
+            }
+
+            #expect(message.localizedCaseInsensitiveContains("duplicate torrent ids"))
+            #expect(message.localizedCaseInsensitiveContains(duplicateID.rawValue))
+        }
+    }
+
+    @Test
+    func downloaderPersistentStateValidatesColdStartRestoreBeforeReportingSuccess() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentApplePersistentValidation-\(UUID().uuidString)", isDirectory: true)
+        let torrentFileURL = rootDirectory.appendingPathComponent("validation.torrent")
+        let invalidDownloadPath = rootDirectory.appendingPathComponent("not-a-directory")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "validation.mkv").write(to: torrentFileURL, options: .atomic)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory.appendingPathComponent("Downloads", isDirectory: true)),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+        _ = try await downloader.addTorrent(
+            from: .torrentFile(torrentFileURL, displayName: "Validation"),
+            options: AddTorrentOptions(downloadDirectory: rootDirectory.appendingPathComponent("Validated", isDirectory: true))
+        )
+        _ = try await downloader.savePersistentState()
+        await downloader.stop()
+
+        try Data("blocked".utf8).write(to: invalidDownloadPath, options: .atomic)
+        let manifestURL = persistentStateDirectoryURL(for: rootDirectory).appendingPathComponent("manifest.json")
+        let manifestData = try Data(contentsOf: manifestURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+        manifest.torrents[0].downloadDirectory = invalidDownloadPath
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+
+        let restoredDownloader = TorrentDownloader(rootDirectory: rootDirectory)
+        let report = try await restoredDownloader.restorePersistentState()
+
+        #expect(report.entries.count == 1)
+        #expect(report.failedCount == 1)
+        #expect(report.restoredCount == 0)
+        #expect(report.degradedCount == 0)
+
+        try await restoredDownloader.start()
+        #expect((await restoredDownloader.torrentStatuses()).isEmpty)
+    }
+
+    @Test
+    func coldStartBestEffortRestoreKeepsHealthyTorrentsWhenOneFails() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleColdStartBestEffort-\(UUID().uuidString)", isDirectory: true)
+        let goodTorrentURL = rootDirectory.appendingPathComponent("good.torrent")
+        let badTorrentURL = rootDirectory.appendingPathComponent("bad.torrent")
+        let goodDownloadDirectory = rootDirectory.appendingPathComponent("GoodDownloads", isDirectory: true)
+        let blockedDownloadPath = rootDirectory.appendingPathComponent("BlockedDownloads")
+
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try makeEncodedTorrentData(fileName: "good.mkv").write(to: goodTorrentURL, options: .atomic)
+        try makeEncodedTorrentData(fileName: "bad.mkv").write(to: badTorrentURL, options: .atomic)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+        _ = try await downloader.addTorrent(
+            from: .torrentFile(goodTorrentURL, displayName: "Good"),
+            options: AddTorrentOptions(downloadDirectory: goodDownloadDirectory)
+        )
+        _ = try await downloader.addTorrent(
+            from: .torrentFile(badTorrentURL, displayName: "Bad"),
+            options: AddTorrentOptions(downloadDirectory: rootDirectory.appendingPathComponent("BadDownloads", isDirectory: true))
+        )
+        let manifestURL = try await downloader.savePersistentState()
+        await downloader.stop()
+
+        try Data("blocked".utf8).write(to: blockedDownloadPath, options: .atomic)
+        let manifestData = try Data(contentsOf: manifestURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+        #expect(manifest.torrents.count == 2)
+        manifest.torrents[1].downloadDirectory = blockedDownloadPath
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+
+        let restoredDownloader = TorrentDownloader(rootDirectory: rootDirectory)
+        let report = try await restoredDownloader.restorePersistentState()
+        try await restoredDownloader.start()
+
+        let statuses = await restoredDownloader.torrentStatuses()
+        #expect(report.entries.count == 2)
+        #expect(report.failedCount == 1)
+        #expect(report.restoredCount + report.degradedCount == 1)
+        #expect(statuses.count == 1)
+        #expect(statuses[0].downloadDirectory == goodDownloadDirectory)
+    }
     
     private func makeEncodedTorrentData(fileName: String, length: Int = 16_384) -> Data {
         let pieces = Data(repeating: 0x31, count: 20)
@@ -718,6 +1026,29 @@ struct TorrentSessionTests {
         }
 
         throw TrackerWaitError.timedOut
+    }
+
+    private func waitForDownloadDirectory(
+        on handle: TorrentHandle,
+        expectedDirectory: URL,
+        timeoutSeconds: TimeInterval
+    ) async throws -> URL {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+        while Date() < deadline {
+            let currentDirectory = try await handle.downloadDirectory()
+            if currentDirectory == expectedDirectory {
+                return currentDirectory
+            }
+
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        return try await handle.downloadDirectory()
+    }
+
+    private func persistentStateDirectoryURL(for rootDirectory: URL) -> URL {
+        rootDirectory.appendingPathComponent("PersistentState", isDirectory: true)
     }
 }
 

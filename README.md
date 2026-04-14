@@ -29,7 +29,7 @@ import LibtorrentApple
 
 ## Main Types
 
-- `TorrentDownloader`: higher-level entry point with managed directories, metadata fetch, and resume snapshots
+- `TorrentDownloader`: higher-level entry point with managed directories, metadata fetch, and durable restore
 - `TorrentSession`: lower-level session actor for direct torrent lifecycle control
 - `TorrentHandle`: torrent-scoped control surface
 - `TorrentFileHandle`: file-scoped control surface
@@ -224,14 +224,21 @@ print(trackers.count, peers.count, pieces.count)
 
 ### 10. Save and restore
 
-Repository-level JSON snapshot:
+Durable restart recovery for iOS and macOS:
 
 ```swift
-let snapshotURL = try await downloader.persistResumeSnapshot(named: "default")
-print(snapshotURL.path)
+let persistentStateURL = try await downloader.savePersistentState()
+print(persistentStateURL.path)
 
-try await downloader.restoreLatestResumeSnapshot()
+let report = try await downloader.restorePersistentState()
+print(report.restoredCount, report.degradedCount, report.failedCount)
 ```
+
+Use this path when you want qB or Transmission style restart recovery:
+
+- the SDK persists a session manifest plus per-torrent resume artifacts
+- restore prefers native resume data, then falls back to persisted `.torrent` metadata, then to the original source when still available
+- downstream apps should trigger saves on launch, backgrounding, and a periodic debounce timer
 
 Native per-torrent resume data:
 

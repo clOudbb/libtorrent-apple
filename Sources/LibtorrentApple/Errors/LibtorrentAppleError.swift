@@ -18,7 +18,6 @@ public enum LibtorrentAppleError: Error, Sendable, Equatable {
     case pieceControlFailed(String)
     case fileSystemOperationFailed(String)
     case operationTimedOut(String)
-    case resumeDataEncodingFailed(String)
     case resumeDataDecodingFailed(String)
 }
 
@@ -62,8 +61,6 @@ extension LibtorrentAppleError: LocalizedError {
             return "The file system operation failed: \(message)"
         case let .operationTimedOut(message):
             return "The torrent operation timed out: \(message)"
-        case let .resumeDataEncodingFailed(message):
-            return "Failed to encode resume data: \(message)"
         case let .resumeDataDecodingFailed(message):
             return "Failed to decode resume data: \(message)"
         }

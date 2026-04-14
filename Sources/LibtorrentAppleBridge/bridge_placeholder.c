@@ -303,6 +303,10 @@ bool libtorrent_apple_bridge_supports_https_trackers(void) {
     return false;
 }
 
+int32_t libtorrent_apple_required_alert_mask(void) {
+    return LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
+}
+
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void) {
     libtorrent_apple_session_configuration_t configuration = {0};
     configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
@@ -1005,7 +1009,7 @@ bool libtorrent_apple_torrent_move_storage(
     }
 
     copy_string(torrent->download_path, sizeof(torrent->download_path), download_path);
-    push_alert(session, 1011, "placeholder_move_storage", "Placeholder torrent storage move requested.", torrent->info_hash);
+    push_alert(session, 1011, "storage_moved", download_path, torrent->info_hash);
     return true;
 }
 

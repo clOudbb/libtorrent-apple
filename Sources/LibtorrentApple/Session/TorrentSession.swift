@@ -14,6 +14,8 @@ private struct TrackedTorrent: Sendable, Hashable, Codable {
     var metrics: TorrentMetrics
     var addedAt: Date
     var updatedAt: Date
+    var persistedResumeDataURL: URL?
+    var persistedTorrentFileURL: URL?
 }
 
 private struct ThroughputOptimizerRuntimeState: Sendable {
@@ -25,8 +27,24 @@ private struct ThroughputOptimizerRuntimeState: Sendable {
 }
 
 private struct RehydrationSeed: Sendable {
+    let id: TorrentID
     let tracked: TrackedTorrent
     let nativeResumeData: Data?
+}
+
+private struct PendingStorageMove: Sendable {
+    let directory: URL
+    let requestedAt: Date
+}
+
+private struct PreparedPersistentRestoreCandidate: Sendable {
+    let trackedTorrent: (id: TorrentID, torrent: TrackedTorrent)?
+    let reportEntry: PersistentStateRestoreReport.Entry
+}
+
+private enum RehydrationFailurePolicy: Sendable {
+    case strict
+    case bestEffort
 }
 
 public actor TorrentSession {
@@ -44,7 +62,9 @@ public actor TorrentSession {
     private var throughputOptimizerBaseConfiguration: SessionConfiguration?
     private var throughputOptimizerState = ThroughputOptimizerRuntimeState()
     private var throughputOptimizerInternalApply = false
+    private var persistentStateRevision: UInt64 = 0
     private var torrents: [TorrentID: TrackedTorrent] = [:]
+    private var pendingStorageMoves: [TorrentID: PendingStorageMove] = [:]
     private var statusReadFailureCounts: [TorrentID: Int] = [:]
     private let alertStreamStorage: AsyncStream<TorrentAlert>
     private let alertContinuation: AsyncStream<TorrentAlert>.Continuation
@@ -162,9 +182,16 @@ public actor TorrentSession {
 
         do {
             nativeSession = session
-            try rehydrateTrackedTorrents()
+            let failureCount = try rehydrateTrackedTorrents(failurePolicy: .bestEffort)
             isRunning = true
             startNativeAlertPolling()
+            if failureCount > 0 {
+                emitAlert(
+                    .nativeEvent,
+                    nativeEventName: "session_torrent_restore_partial_failure",
+                    message: "Session started with \(failureCount) torrent restore failures."
+                )
+            }
             emitAlert(.sessionStarted, message: "Torrent session started.")
         } catch {
             stopNativeAlertPolling()
@@ -177,6 +204,7 @@ public actor TorrentSession {
     public func applyConfiguration(_ configuration: SessionConfiguration) throws {
         if !isRunning {
             self.configuration = configuration
+            bumpPersistentStateRevision()
             return
         }
 
@@ -196,6 +224,7 @@ public actor TorrentSession {
             {
                 throughputOptimizerBaseConfiguration = configuration
             }
+            bumpPersistentStateRevision()
             emitAlert(.nativeEvent, nativeEventName: "session_configuration_applied", message: "Applied session configuration.")
         } catch {
             throw translatedConfigurationError(error)
@@ -211,6 +240,7 @@ public actor TorrentSession {
         debounceInterval: TimeInterval = 0.2
     ) {
         deferredConfiguration = configuration
+        bumpPersistentStateRevision()
         deferredApplyTask?.cancel()
 
         deferredApplyTask = Task { [weak self] in
@@ -345,6 +375,7 @@ public actor TorrentSession {
         stopNativeAlertPolling()
         BridgeRuntime.destroySession(nativeSession)
         nativeSession = nil
+        pendingStorageMoves = [:]
         statusReadFailureCounts = [:]
         isRunning = false
         emitAlert(.sessionStopped, message: "Torrent session stopped.")
@@ -372,10 +403,13 @@ public actor TorrentSession {
             state: .running,
             metrics: .empty,
             addedAt: timestamp,
-            updatedAt: timestamp
+            updatedAt: timestamp,
+            persistedResumeDataURL: nil,
+            persistedTorrentFileURL: nil
         )
 
         applyTrackerPresetIfNeeded(session: session, torrentID: id)
+        bumpPersistentStateRevision()
 
         let status = try torrentStatus(for: id)
         emitAlert(.torrentAdded, torrentID: status.id, message: "Added torrent \(status.name).")
@@ -413,9 +447,12 @@ public actor TorrentSession {
             state: .running,
             metrics: .empty,
             addedAt: timestamp,
-            updatedAt: timestamp
+            updatedAt: timestamp,
+            persistedResumeDataURL: nil,
+            persistedTorrentFileURL: nil
         )
 
+        bumpPersistentStateRevision()
         let status = try torrentStatus(for: id)
         emitAlert(.resumeDataRestored, torrentID: id, message: "Added torrent from native resume data.")
         return status
@@ -502,6 +539,7 @@ public actor TorrentSession {
 
         do {
             try BridgeRuntime.replaceTrackers(session: session, id: id, trackers: trackers)
+            bumpPersistentStateRevision()
             emitAlert(.torrentTrackersReplaced, torrentID: id, message: "Replaced torrent trackers.")
             return try torrentTrackers(for: id)
         } catch {
@@ -539,6 +577,7 @@ public actor TorrentSession {
                 trackers: trackers,
                 forceReannounce: forceReannounce
             )
+            bumpPersistentStateRevision()
             emitAlert(.torrentTrackerAdded, torrentID: id, message: "Added \(trackers.count) torrent tracker(s).")
             return try torrentTrackers(for: id)
         } catch {
@@ -604,6 +643,7 @@ public actor TorrentSession {
 
         do {
             try BridgeRuntime.setFilePriority(session: session, id: id, fileIndex: fileIndex, priority: priority)
+            bumpPersistentStateRevision()
             emitAlert(.torrentFilePriorityChanged, torrentID: id, message: "Updated torrent file priority.")
             return try torrentFile(for: id, index: fileIndex)
         } catch {
@@ -618,6 +658,7 @@ public actor TorrentSession {
         }
 
         try BridgeRuntime.setSequentialDownload(session: session, id: id, isEnabled: isEnabled)
+        bumpPersistentStateRevision()
         emitAlert(.sequentialDownloadChanged, torrentID: id, message: "Updated sequential download mode.")
     }
 
@@ -790,8 +831,13 @@ public actor TorrentSession {
                 downloadPath: resolvedDirectory.path,
                 strategy: strategy
             )
-            syncTrackedTorrentDownloadDirectory(id: id, directory: resolvedDirectory)
-            emitAlert(.torrentStorageMoved, torrentID: id, message: "Requested torrent storage move.")
+            pendingStorageMoves[id] = PendingStorageMove(directory: resolvedDirectory, requestedAt: Date())
+            emitAlert(
+                .nativeEvent,
+                torrentID: id,
+                nativeEventName: "torrent_storage_move_requested",
+                message: "Requested torrent storage move."
+            )
             return resolvedDirectory
         } catch {
             throw translatedStorageError(error)
@@ -810,6 +856,7 @@ public actor TorrentSession {
 
         do {
             try BridgeRuntime.setPiecePriority(session: session, id: id, pieceIndex: pieceIndex, priority: priority)
+            bumpPersistentStateRevision()
             emitAlert(.torrentPiecePriorityChanged, torrentID: id, message: "Updated torrent piece priority.")
         } catch {
             throw translatedPieceControlError(error, torrentID: id)
@@ -833,6 +880,7 @@ public actor TorrentSession {
                 pieceIndex: pieceIndex,
                 milliseconds: milliseconds
             )
+            bumpPersistentStateRevision()
             emitAlert(.torrentPieceDeadlineChanged, torrentID: id, message: "Updated torrent piece deadline.")
         } catch {
             throw translatedPieceControlError(error, torrentID: id)
@@ -847,6 +895,7 @@ public actor TorrentSession {
 
         do {
             try BridgeRuntime.resetPieceDeadline(session: session, id: id, pieceIndex: pieceIndex)
+            bumpPersistentStateRevision()
             emitAlert(.torrentPieceDeadlineChanged, torrentID: id, message: "Cleared torrent piece deadline.")
         } catch {
             throw translatedPieceControlError(error, torrentID: id)
@@ -864,6 +913,7 @@ public actor TorrentSession {
         tracked.state = .paused
         tracked.updatedAt = Date()
         torrents[id] = tracked
+        bumpPersistentStateRevision()
         let status = try torrentStatus(for: id)
         emitAlert(.torrentPaused, torrentID: id, message: "Paused torrent.")
         return status
@@ -880,6 +930,7 @@ public actor TorrentSession {
         tracked.state = .running
         tracked.updatedAt = Date()
         torrents[id] = tracked
+        bumpPersistentStateRevision()
         let status = try torrentStatus(for: id)
         emitAlert(.torrentResumed, torrentID: id, message: "Resumed torrent.")
         return status
@@ -893,7 +944,9 @@ public actor TorrentSession {
 
         try BridgeRuntime.removeTorrent(session: session, id: id, deleteData: deleteData)
         torrents.removeValue(forKey: id)
+        pendingStorageMoves.removeValue(forKey: id)
         statusReadFailureCounts.removeValue(forKey: id)
+        bumpPersistentStateRevision()
 
         let suffix = deleteData ? " and requested data deletion" : ""
         emitAlert(.torrentRemoved, torrentID: id, message: "Removed torrent \(removed.name)\(suffix).")
@@ -946,12 +999,90 @@ public actor TorrentSession {
         }
     }
 
-    public func resumeDataSnapshot() -> ResumeDataSnapshot {
-        ResumeDataSnapshot(configuration: configuration, torrents: allTorrentStatuses())
-    }
-
     public func totalStats() -> TorrentDownloaderStats {
         TorrentDownloaderStats(statuses: allTorrentStatuses())
+    }
+
+    func persistentStateRevisionValue() -> UInt64 {
+        persistentStateRevision
+    }
+
+    func persistentStateExportContext() -> PersistentStateExportContext {
+        let descriptors = allTorrentStatuses().map { status in
+            let tracked = torrents[status.id]
+            return PersistentStateExportDescriptor(
+                status: status,
+                persistedResumeDataURL: tracked?.persistedResumeDataURL,
+                persistedTorrentFileURL: tracked?.persistedTorrentFileURL
+            )
+        }
+
+        return PersistentStateExportContext(
+            revision: persistentStateRevision,
+            configuration: persistentConfigurationSnapshot(),
+            torrents: descriptors
+        )
+    }
+
+    func applyPersistentArtifacts(_ artifacts: [PersistentStateTrackedArtifact]) {
+        guard !artifacts.isEmpty else {
+            return
+        }
+
+        for artifact in artifacts {
+            guard var tracked = torrents[artifact.id] else {
+                continue
+            }
+
+            tracked.persistedResumeDataURL = artifact.resumeDataURL
+            tracked.persistedTorrentFileURL = artifact.torrentFileURL
+            torrents[artifact.id] = tracked
+        }
+    }
+
+    func restorePersistentState(
+        configuration: SessionConfiguration,
+        candidates: [PersistentStateRestoreCandidate]
+    ) throws -> PersistentStateRestoreReport {
+        let prepared = candidates.map(preparePersistentRestoreCandidate)
+        let accepted = prepared.compactMap(\.trackedTorrent)
+        let reportEntries = prepared.map(\.reportEntry)
+
+        _ = try makeRestoreEntryIndexByID(
+            reportEntries,
+            context: "preparing persistent restore report"
+        )
+        _ = try makeTrackedTorrentDictionary(
+            accepted,
+            context: "preparing persistent restore state"
+        )
+
+        if isRunning {
+            let report = try rebuildNativeSession(
+                configuration: configuration,
+                trackedTorrents: accepted,
+                reportEntries: reportEntries
+            )
+            statusReadFailureCounts = [:]
+            pendingStorageMoves = [:]
+            bumpPersistentStateRevision()
+            return report
+        }
+
+        let validation = try validatePersistentRestoreCandidates(
+            configuration: configuration,
+            trackedTorrents: accepted,
+            reportEntries: prepared.map(\.reportEntry)
+        )
+        self.configuration = configuration
+        torrents = try makeTrackedTorrentDictionary(
+            validation.trackedTorrents,
+            context: "loading validated persistent restore state"
+        )
+        statusReadFailureCounts = [:]
+        pendingStorageMoves = [:]
+        bumpPersistentStateRevision()
+        return validation.report
     }
 
     public func sessionDiagnostics() throws -> TorrentSessionDiagnostics {
@@ -1027,58 +1158,6 @@ public actor TorrentSession {
             }
 
             throw error
-        }
-    }
-
-    public func exportResumeData() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
-        do {
-            let data = try encoder.encode(resumeDataSnapshot())
-            emitAlert(.resumeDataExported, message: "Exported resume data snapshot.")
-            return data
-        } catch {
-            throw LibtorrentAppleError.resumeDataEncodingFailed(String(describing: error))
-        }
-    }
-
-    public func restoreResumeData(_ snapshot: ResumeDataSnapshot) {
-        configuration = snapshot.configuration
-        torrents = Dictionary(
-            uniqueKeysWithValues: snapshot.torrents.map {
-                (
-                    $0.id,
-                    TrackedTorrent(
-                        source: $0.source,
-                        name: $0.name,
-                        downloadDirectory: $0.downloadDirectory ?? defaultDownloadDirectoryURL(),
-                        state: $0.state,
-                        metrics: $0.metrics,
-                        addedAt: $0.addedAt,
-                        updatedAt: $0.updatedAt
-                    )
-                )
-            }
-        )
-
-        if nativeSession != nil {
-            try? rebuildNativeSession()
-        }
-
-        emitAlert(.resumeDataRestored, message: "Restored resume data snapshot.")
-    }
-
-    public func restoreResumeData(from data: Data) throws {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        do {
-            let snapshot = try decoder.decode(ResumeDataSnapshot.self, from: data)
-            restoreResumeData(snapshot)
-        } catch {
-            throw LibtorrentAppleError.resumeDataDecodingFailed(String(describing: error))
         }
     }
 
@@ -1189,6 +1268,27 @@ public actor TorrentSession {
         }
     }
 
+    private func persistedResumeData(for tracked: TrackedTorrent) -> Data? {
+        guard let persistedResumeDataURL = tracked.persistedResumeDataURL else {
+            return nil
+        }
+
+        return try? Data(contentsOf: persistedResumeDataURL)
+    }
+
+    private func persistedTorrentSource(for tracked: TrackedTorrent) -> TorrentSource? {
+        guard let persistedTorrentFileURL = tracked.persistedTorrentFileURL,
+              FileManager.default.fileExists(atPath: persistedTorrentFileURL.path)
+        else {
+            return nil
+        }
+
+        return .torrentFile(
+            persistedTorrentFileURL,
+            displayName: tracked.source.displayName ?? tracked.name
+        )
+    }
+
     private func makeRehydrationSeeds(from previousSession: BridgeSessionHandle?) -> [RehydrationSeed] {
         torrents
             .sorted { lhs, rhs in
@@ -1199,60 +1299,61 @@ public actor TorrentSession {
                 if let previousSession {
                     nativeResumeData = try? BridgeRuntime.exportNativeResumeData(session: previousSession, id: id)
                 } else {
-                    nativeResumeData = nil
+                    nativeResumeData = persistedResumeData(for: tracked)
                 }
 
                 return RehydrationSeed(
+                    id: id,
                     tracked: tracked,
                     nativeResumeData: nativeResumeData
                 )
             }
     }
 
-    private func rehydrateTrackedTorrents(from previousSession: BridgeSessionHandle? = nil) throws {
+    @discardableResult
+    private func rehydrateTrackedTorrents(
+        from previousSession: BridgeSessionHandle? = nil,
+        failurePolicy: RehydrationFailurePolicy = .strict
+    ) throws -> Int {
         guard !torrents.isEmpty, let nativeSession else {
-            return
+            return 0
         }
 
         let rehydrationSeeds = makeRehydrationSeeds(from: previousSession)
         var rebuilt: [TorrentID: TrackedTorrent] = [:]
+        var failureCount = 0
         for seed in rehydrationSeeds {
             let tracked = seed.tracked
-            let recreatedID: TorrentID
-
-            if let nativeResumeData = seed.nativeResumeData {
-                recreatedID = try BridgeRuntime.addResumeData(
-                    session: nativeSession,
-                    resumeData: nativeResumeData,
-                    downloadPath: try ensureDownloadPath(downloadDirectory: tracked.downloadDirectory)
+            do {
+                let restored = try restoreTorrentIntoSession(
+                    originalID: seed.id,
+                    tracked: tracked,
+                    preferredResumeData: seed.nativeResumeData,
+                    into: nativeSession
                 )
-            } else {
-                recreatedID = try addNativeTorrent(
-                    session: nativeSession,
-                    source: tracked.source,
-                    downloadDirectory: tracked.downloadDirectory
+                rebuilt[restored.id] = materializedTrackedTorrent(
+                    from: tracked,
+                    restoredID: restored.id,
+                    nativeStatus: restored.nativeStatus
                 )
-                applyTrackerPresetIfNeeded(session: nativeSession, torrentID: recreatedID)
+            } catch {
+                switch failurePolicy {
+                case .strict:
+                    throw error
+                case .bestEffort:
+                    failureCount += 1
+                    emitAlert(
+                        .nativeEvent,
+                        torrentID: seed.id,
+                        nativeEventName: "session_torrent_restore_failed",
+                        message: "Failed to restore torrent \(tracked.name): \(error.localizedDescription)"
+                    )
+                }
             }
-
-            if tracked.state == .paused {
-                try BridgeRuntime.pauseTorrent(session: nativeSession, id: recreatedID)
-            }
-
-            let nativeStatus = try BridgeRuntime.status(session: nativeSession, id: recreatedID)
-            let status = materializeStatus(id: recreatedID, tracked: tracked, nativeStatus: nativeStatus)
-            rebuilt[recreatedID] = TrackedTorrent(
-                source: status.source,
-                name: status.name,
-                downloadDirectory: tracked.downloadDirectory,
-                state: status.state,
-                metrics: status.metrics,
-                addedAt: tracked.addedAt,
-                updatedAt: tracked.updatedAt
-            )
         }
 
         torrents = rebuilt
+        return failureCount
     }
 
     private func rebuildNativeSession() throws {
@@ -1269,6 +1370,7 @@ public actor TorrentSession {
         do {
             try rehydrateTrackedTorrents(from: previous)
             isRunning = true
+            pendingStorageMoves = [:]
             startNativeAlertPolling()
             BridgeRuntime.destroySession(previous)
         } catch {
@@ -1276,10 +1378,408 @@ public actor TorrentSession {
             nativeSession = previous
             if let previous {
                 nativeSession = previous
+                pendingStorageMoves = [:]
                 startNativeAlertPolling()
             }
             throw error
         }
+    }
+
+    private func rebuildNativeSession(
+        configuration: SessionConfiguration,
+        trackedTorrents: [(id: TorrentID, torrent: TrackedTorrent)],
+        reportEntries: [PersistentStateRestoreReport.Entry]
+    ) throws -> PersistentStateRestoreReport {
+        let replacement: BridgeSessionHandle
+        do {
+            replacement = try BridgeRuntime.createSession(configuration: configuration)
+        } catch {
+            throw translatedConfigurationError(error)
+        }
+
+        var rebuilt: [TorrentID: TrackedTorrent] = [:]
+        var updatedEntries = reportEntries
+        let entryIndexByID = try makeRestoreEntryIndexByID(
+            updatedEntries,
+            context: "building running-session restore report"
+        )
+
+        for trackedTorrent in trackedTorrents {
+            let tracked = trackedTorrent.torrent
+
+            do {
+                let restored = try restoreTorrentIntoSession(
+                    originalID: trackedTorrent.id,
+                    tracked: tracked,
+                    preferredResumeData: persistedResumeData(for: tracked),
+                    into: replacement
+                )
+                rebuilt[restored.id] = materializedTrackedTorrent(
+                    from: tracked,
+                    restoredID: restored.id,
+                    nativeStatus: restored.nativeStatus
+                )
+                if let index = entryIndexByID[trackedTorrent.id] {
+                    updatedEntries[index] = restored.reportEntry
+                }
+            } catch {
+                if let index = entryIndexByID[trackedTorrent.id] {
+                    updatedEntries[index] = PersistentStateRestoreReport.Entry(
+                        id: trackedTorrent.id,
+                        name: tracked.name,
+                        outcome: .failed,
+                        message: "Restore failed: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        let previousSession = nativeSession
+        stopNativeAlertPolling()
+        nativeSession = replacement
+        self.configuration = configuration
+        torrents = rebuilt
+        pendingStorageMoves = [:]
+        isRunning = true
+        startNativeAlertPolling()
+        BridgeRuntime.destroySession(previousSession)
+        return PersistentStateRestoreReport(entries: updatedEntries)
+    }
+
+    private func validatePersistentRestoreCandidates(
+        configuration: SessionConfiguration,
+        trackedTorrents: [(id: TorrentID, torrent: TrackedTorrent)],
+        reportEntries: [PersistentStateRestoreReport.Entry]
+    ) throws -> (trackedTorrents: [(id: TorrentID, torrent: TrackedTorrent)], report: PersistentStateRestoreReport) {
+        let validationSession: BridgeSessionHandle
+        do {
+            validationSession = try BridgeRuntime.createSession(configuration: configuration)
+        } catch {
+            throw translatedConfigurationError(error)
+        }
+        defer {
+            BridgeRuntime.destroySession(validationSession)
+        }
+
+        var validated: [(id: TorrentID, torrent: TrackedTorrent)] = []
+        var updatedEntries = reportEntries
+        let entryIndexByID = try makeRestoreEntryIndexByID(
+            updatedEntries,
+            context: "validating persistent restore candidates"
+        )
+
+        for trackedTorrent in trackedTorrents {
+            do {
+                let restored = try restoreTorrentIntoSession(
+                    originalID: trackedTorrent.id,
+                    tracked: trackedTorrent.torrent,
+                    preferredResumeData: persistedResumeData(for: trackedTorrent.torrent),
+                    into: validationSession
+                )
+                validated.append(trackedTorrent)
+                if let index = entryIndexByID[trackedTorrent.id] {
+                    updatedEntries[index] = restored.reportEntry
+                }
+                try? BridgeRuntime.removeTorrent(session: validationSession, id: restored.id, deleteData: false)
+            } catch {
+                if let index = entryIndexByID[trackedTorrent.id] {
+                    updatedEntries[index] = PersistentStateRestoreReport.Entry(
+                        id: trackedTorrent.id,
+                        name: trackedTorrent.torrent.name,
+                        outcome: .failed,
+                        message: "Restore validation failed: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        return (
+            trackedTorrents: validated,
+            report: PersistentStateRestoreReport(entries: updatedEntries)
+        )
+    }
+
+    private func persistentConfigurationSnapshot() -> SessionConfiguration {
+        if let deferredConfiguration {
+            return deferredConfiguration
+        }
+
+        if throughputOptimizerPolicy != nil,
+           let throughputOptimizerBaseConfiguration
+        {
+            return throughputOptimizerBaseConfiguration
+        }
+
+        return configuration
+    }
+
+    private func bumpPersistentStateRevision() {
+        persistentStateRevision &+= 1
+    }
+
+    private func makeTrackedTorrentDictionary(
+        _ trackedTorrents: [(id: TorrentID, torrent: TrackedTorrent)],
+        context: String
+    ) throws -> [TorrentID: TrackedTorrent] {
+        var result: [TorrentID: TrackedTorrent] = [:]
+        var duplicates: [TorrentID] = []
+
+        for trackedTorrent in trackedTorrents {
+            if result.updateValue(trackedTorrent.torrent, forKey: trackedTorrent.id) != nil {
+                duplicates.append(trackedTorrent.id)
+            }
+        }
+
+        if !duplicates.isEmpty {
+            throw duplicatePersistentRestoreIDsError(duplicates, context: context)
+        }
+
+        return result
+    }
+
+    private func makeRestoreEntryIndexByID(
+        _ entries: [PersistentStateRestoreReport.Entry],
+        context: String
+    ) throws -> [TorrentID: Int] {
+        var result: [TorrentID: Int] = [:]
+        var duplicates: [TorrentID] = []
+
+        for (index, entry) in entries.enumerated() {
+            if result.updateValue(index, forKey: entry.id) != nil {
+                duplicates.append(entry.id)
+            }
+        }
+
+        if !duplicates.isEmpty {
+            throw duplicatePersistentRestoreIDsError(duplicates, context: context)
+        }
+
+        return result
+    }
+
+    private func duplicatePersistentRestoreIDsError(
+        _ duplicateIDs: [TorrentID],
+        context: String
+    ) -> LibtorrentAppleError {
+        let uniqueIDs = Array(Set(duplicateIDs.map(\.rawValue))).sorted()
+        let joinedIDs = uniqueIDs.joined(separator: ", ")
+        return .resumeDataDecodingFailed(
+            "Persistent restore state contained duplicate torrent ids while \(context): \(joinedIDs)"
+        )
+    }
+
+    private func restoreTorrentIntoSession(
+        originalID: TorrentID,
+        tracked: TrackedTorrent,
+        preferredResumeData: Data?,
+        into session: BridgeSessionHandle
+    ) throws -> (
+        id: TorrentID,
+        nativeStatus: libtorrent_apple_torrent_status_t,
+        reportEntry: PersistentStateRestoreReport.Entry
+    ) {
+        let downloadPath = try ensureDownloadPath(downloadDirectory: tracked.downloadDirectory)
+        let resumeData = preferredResumeData ?? persistedResumeData(for: tracked)
+        var attemptedErrors: [String] = []
+
+        if let resumeData {
+            do {
+                let restoredID = try BridgeRuntime.addResumeData(
+                    session: session,
+                    resumeData: resumeData,
+                    downloadPath: downloadPath
+                )
+                let nativeStatus = try finalizeRestoredTorrent(
+                    restoredID,
+                    tracked: tracked,
+                    session: session
+                )
+                return (
+                    id: restoredID,
+                    nativeStatus: nativeStatus,
+                    reportEntry: PersistentStateRestoreReport.Entry(
+                        id: originalID,
+                        name: tracked.name,
+                        outcome: .restored,
+                        message: "Restored using native resume data."
+                    )
+                )
+            } catch {
+                attemptedErrors.append("native resume data restore failed: \(error.localizedDescription)")
+            }
+        }
+
+        if let persistedSource = persistedTorrentSource(for: tracked) {
+            do {
+                let restoredID = try addNativeTorrent(
+                    session: session,
+                    source: persistedSource,
+                    downloadDirectory: tracked.downloadDirectory
+                )
+                applyTrackerPresetIfNeeded(session: session, torrentID: restoredID)
+                let nativeStatus = try finalizeRestoredTorrent(
+                    restoredID,
+                    tracked: tracked,
+                    session: session
+                )
+                return (
+                    id: restoredID,
+                    nativeStatus: nativeStatus,
+                    reportEntry: PersistentStateRestoreReport.Entry(
+                        id: originalID,
+                        name: tracked.name,
+                        outcome: .degraded,
+                        message: "Restored using persisted .torrent metadata."
+                    )
+                )
+            } catch {
+                attemptedErrors.append("persisted .torrent restore failed: \(error.localizedDescription)")
+            }
+        }
+
+        if sourceIsUsableForRestore(tracked.source) {
+            do {
+                let restoredID = try addNativeTorrent(
+                    session: session,
+                    source: tracked.source,
+                    downloadDirectory: tracked.downloadDirectory
+                )
+                applyTrackerPresetIfNeeded(session: session, torrentID: restoredID)
+                let nativeStatus = try finalizeRestoredTorrent(
+                    restoredID,
+                    tracked: tracked,
+                    session: session
+                )
+                return (
+                    id: restoredID,
+                    nativeStatus: nativeStatus,
+                    reportEntry: PersistentStateRestoreReport.Entry(
+                        id: originalID,
+                        name: tracked.name,
+                        outcome: .degraded,
+                        message: "Restored using the original source."
+                    )
+                )
+            } catch {
+                attemptedErrors.append("original source restore failed: \(error.localizedDescription)")
+            }
+        }
+
+        if attemptedErrors.isEmpty {
+            throw LibtorrentAppleError.resumeDataDecodingFailed(
+                "No usable resume data, persisted .torrent metadata, or original source was available."
+            )
+        }
+
+        throw LibtorrentAppleError.resumeDataDecodingFailed(attemptedErrors.joined(separator: " "))
+    }
+
+    private func sourceIsUsableForRestore(_ source: TorrentSource) -> Bool {
+        switch source.kind {
+        case .magnetLink:
+            return source.location.scheme?.lowercased() == "magnet"
+        case .torrentFile:
+            return source.location.isFileURL && FileManager.default.fileExists(atPath: source.location.path)
+        }
+    }
+
+    private func preparePersistentRestoreCandidate(
+        _ candidate: PersistentStateRestoreCandidate
+    ) -> PreparedPersistentRestoreCandidate {
+        let manifestTorrent = candidate.manifestTorrent
+        let tracked = TrackedTorrent(
+            source: manifestTorrent.source,
+            name: manifestTorrent.name,
+            downloadDirectory: manifestTorrent.downloadDirectory,
+            state: manifestTorrent.desiredState,
+            metrics: .empty,
+            addedAt: manifestTorrent.addedAt,
+            updatedAt: manifestTorrent.updatedAt,
+            persistedResumeDataURL: candidate.resumeDataURL,
+            persistedTorrentFileURL: candidate.torrentFileURL
+        )
+
+        if candidate.resumeDataURL != nil {
+            return PreparedPersistentRestoreCandidate(
+                trackedTorrent: (manifestTorrent.id, tracked),
+                reportEntry: PersistentStateRestoreReport.Entry(
+                    id: manifestTorrent.id,
+                    name: manifestTorrent.name,
+                    outcome: .restored,
+                    message: "Prepared restore using native resume data."
+                )
+            )
+        }
+
+        if candidate.torrentFileURL != nil {
+            return PreparedPersistentRestoreCandidate(
+                trackedTorrent: (manifestTorrent.id, tracked),
+                reportEntry: PersistentStateRestoreReport.Entry(
+                    id: manifestTorrent.id,
+                    name: manifestTorrent.name,
+                    outcome: .degraded,
+                    message: "Native resume data was unavailable; falling back to persisted .torrent metadata."
+                )
+            )
+        }
+
+        if sourceIsUsableForRestore(manifestTorrent.source) {
+            return PreparedPersistentRestoreCandidate(
+                trackedTorrent: (manifestTorrent.id, tracked),
+                reportEntry: PersistentStateRestoreReport.Entry(
+                    id: manifestTorrent.id,
+                    name: manifestTorrent.name,
+                    outcome: .degraded,
+                    message: "Persisted artifacts were unavailable; falling back to the original source."
+                )
+            )
+        }
+
+        return PreparedPersistentRestoreCandidate(
+            trackedTorrent: nil,
+            reportEntry: PersistentStateRestoreReport.Entry(
+                id: manifestTorrent.id,
+                name: manifestTorrent.name,
+                outcome: .failed,
+                message: "No usable resume data, persisted .torrent metadata, or original source was available."
+            )
+        )
+    }
+
+    private func finalizeRestoredTorrent(
+        _ restoredID: TorrentID,
+        tracked: TrackedTorrent,
+        session: BridgeSessionHandle
+    ) throws -> libtorrent_apple_torrent_status_t {
+        do {
+            if tracked.state == .paused {
+                try BridgeRuntime.pauseTorrent(session: session, id: restoredID)
+            }
+
+            return try BridgeRuntime.status(session: session, id: restoredID)
+        } catch {
+            try? BridgeRuntime.removeTorrent(session: session, id: restoredID, deleteData: false)
+            throw error
+        }
+    }
+
+    private func materializedTrackedTorrent(
+        from tracked: TrackedTorrent,
+        restoredID: TorrentID,
+        nativeStatus: libtorrent_apple_torrent_status_t
+    ) -> TrackedTorrent {
+        let status = materializeStatus(id: restoredID, tracked: tracked, nativeStatus: nativeStatus)
+        return TrackedTorrent(
+            source: status.source,
+            name: status.name,
+            downloadDirectory: tracked.downloadDirectory,
+            state: status.state,
+            metrics: status.metrics,
+            addedAt: tracked.addedAt,
+            updatedAt: tracked.updatedAt,
+            persistedResumeDataURL: tracked.persistedResumeDataURL,
+            persistedTorrentFileURL: tracked.persistedTorrentFileURL
+        )
     }
 
     private func startThroughputOptimizerTaskIfNeeded() {
@@ -1545,6 +2045,7 @@ public actor TorrentSession {
 
         do {
             while let nativeAlert = try BridgeRuntime.popAlert(session: session) {
+                handleNativeAlertSideEffects(nativeAlert)
                 let kind = mappedAlertKind(for: nativeAlert)
                 emitAlert(
                     kind,
@@ -1563,6 +2064,24 @@ public actor TorrentSession {
                 message: "Native alert polling failed: \(error.localizedDescription)"
             )
             return false
+        }
+    }
+
+    private func handleNativeAlertSideEffects(_ nativeAlert: BridgeNativeAlert) {
+        guard let torrentID = nativeAlert.torrentID else {
+            return
+        }
+
+        switch nativeAlert.name.lowercased() {
+        case "storage_moved":
+            if let pendingMove = pendingStorageMoves.removeValue(forKey: torrentID) {
+                syncTrackedTorrentDownloadDirectory(id: torrentID, directory: pendingMove.directory)
+                bumpPersistentStateRevision()
+            }
+        case "storage_moved_failed":
+            pendingStorageMoves.removeValue(forKey: torrentID)
+        default:
+            break
         }
     }
 
@@ -1707,6 +2226,8 @@ public actor TorrentSession {
             return .torrentStateChanged
         case "torrent_finished":
             return .torrentFinished
+        case "storage_moved":
+            return .torrentStorageMoved
         case "tracker_warning":
             return .torrentTrackerWarning
         case "tracker_error":

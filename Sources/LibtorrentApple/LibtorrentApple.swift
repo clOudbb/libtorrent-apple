@@ -1027,12 +1027,17 @@ enum BridgeRuntime {
         from configuration: SessionConfiguration
     ) -> libtorrent_apple_session_configuration_t {
         var nativeConfiguration = libtorrent_apple_session_configuration_default()
+        let requiredAlertMask = libtorrent_apple_required_alert_mask()
         nativeConfiguration.enable_dht = configuration.enableDistributedHashTable
         nativeConfiguration.enable_lsd = configuration.enableLocalPeerDiscovery
         nativeConfiguration.enable_upnp = configuration.enableUPnP
         nativeConfiguration.enable_natpmp = configuration.enableNATPMP
         nativeConfiguration.listen_port = listenPort(from: configuration)
-        nativeConfiguration.alert_mask = configuration.alertMask ?? LIBTORRENT_APPLE_DEFAULT_ALERT_MASK
+        if let alertMask = configuration.alertMask {
+            nativeConfiguration.alert_mask = alertMask | requiredAlertMask
+        } else {
+            nativeConfiguration.alert_mask = nativeConfiguration.alert_mask | requiredAlertMask
+        }
         nativeConfiguration.upload_rate_limit = Int32(clamping: configuration.uploadRateLimitBytesPerSecond)
         nativeConfiguration.download_rate_limit = Int32(clamping: configuration.downloadRateLimitBytesPerSecond)
         nativeConfiguration.connections_limit = Int32(clamping: configuration.connectionsLimit)

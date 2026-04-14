@@ -29,7 +29,7 @@ import LibtorrentApple
 
 ## 主要类型
 
-- `TorrentDownloader`：更高层的入口，负责目录管理、元数据获取、resume 快照
+- `TorrentDownloader`：更高层的入口，负责目录管理、元数据获取、持久化恢复
 - `TorrentSession`：更底层的 session actor，直接控制 torrent 生命周期
 - `TorrentHandle`：单个 torrent 的控制对象
 - `TorrentFileHandle`：单个文件的控制对象
@@ -155,14 +155,21 @@ print(trackers.count, peers.count, pieces.count)
 
 ### 6. 保存和恢复
 
-仓库级 JSON 快照恢复：
+适用于 iOS / macOS 重启后的持久化恢复：
 
 ```swift
-let snapshotURL = try await downloader.persistResumeSnapshot(named: "default")
-print(snapshotURL.path)
+let persistentStateURL = try await downloader.savePersistentState()
+print(persistentStateURL.path)
 
-try await downloader.restoreLatestResumeSnapshot()
+let report = try await downloader.restorePersistentState()
+print(report.restoredCount, report.degradedCount, report.failedCount)
 ```
+
+这条路径更接近 qB / Transmission 的恢复策略：
+
+- SDK 会保存 session manifest 和每个 torrent 的恢复产物
+- 恢复时优先使用 native resume data，缺失时回退到持久化的 `.torrent` 元数据，再回退到仍然可用的原始 source
+- 下游 App 应在启动、进入后台、以及定时 debounce 时触发保存
 
 单个 torrent 的 native resume data：
 

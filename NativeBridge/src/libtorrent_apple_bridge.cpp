@@ -1365,7 +1365,8 @@ bool write_torrent_status(lt::torrent_handle const &handle, libtorrent_apple_tor
 
 int default_alert_mask()
 {
-    lt::alert_category_t const mask = lt::alert_category::status | lt::alert_category::error;
+    lt::alert_category_t const mask =
+        lt::alert_category::status | lt::alert_category::error | lt::alert_category::storage;
     return static_cast<int>(static_cast<std::uint32_t>(mask));
 }
 
@@ -1463,10 +1464,15 @@ bool libtorrent_apple_bridge_supports_https_trackers(void)
 #endif
 }
 
+int32_t libtorrent_apple_required_alert_mask(void)
+{
+    return default_alert_mask();
+}
+
 libtorrent_apple_session_configuration_t libtorrent_apple_session_configuration_default(void)
 {
     libtorrent_apple_session_configuration_t configuration = {};
-    configuration.alert_mask = LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
+    configuration.alert_mask = default_alert_mask();
     configuration.share_ratio_limit = -1;
     configuration.announce_to_all_trackers = -1;
     configuration.announce_to_all_tiers = -1;

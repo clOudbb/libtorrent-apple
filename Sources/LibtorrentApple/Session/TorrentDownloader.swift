@@ -10,6 +10,8 @@ public actor TorrentDownloader {
     public private(set) var configuration: SessionConfiguration
 
     private let sessionStorage: TorrentSession
+    private var persistentStateSaveTask: Task<URL?, Never>?
+    private var lastPersistedPersistentStateRevision: UInt64 = 0
 
     public init(
         configuration: SessionConfiguration = .default,
@@ -115,6 +117,8 @@ public actor TorrentDownloader {
     }
 
     public func stop() async {
+        persistentStateSaveTask?.cancel()
+        persistentStateSaveTask = nil
         await sessionStorage.stop()
     }
 
@@ -241,40 +245,146 @@ public actor TorrentDownloader {
     }
 
     @discardableResult
-    public func persistResumeSnapshot(named name: String = "default") async throws -> URL {
+    public func savePersistentState() async throws -> URL {
         try createRequiredDirectories()
 
-        let snapshotData = try await sessionStorage.exportResumeData()
-        let snapshotURL = snapshotFileURL(for: name)
-        try snapshotData.write(to: snapshotURL, options: .atomic)
-        return snapshotURL
+        let exportContext = await sessionStorage.persistentStateExportContext()
+        let handlesByID = Dictionary(
+            uniqueKeysWithValues: await sessionStorage.handles().map { ($0.id, $0) }
+        )
+
+        var trackedArtifacts: [PersistentStateTrackedArtifact] = []
+        var manifestTorrents: [PersistentStateManifestTorrent] = []
+
+        for descriptor in exportContext.torrents {
+            let status = descriptor.status
+            let handle = handlesByID[status.id]
+            let resumeDataURL = try await persistResumeDataArtifact(
+                for: status,
+                handle: handle,
+                existingArtifactURL: descriptor.persistedResumeDataURL
+            )
+            let torrentFileURL = try await persistTorrentFileArtifact(
+                for: status,
+                handle: handle,
+                existingArtifactURL: descriptor.persistedTorrentFileURL
+            )
+
+            trackedArtifacts.append(
+                PersistentStateTrackedArtifact(
+                    id: status.id,
+                    resumeDataURL: resumeDataURL,
+                    torrentFileURL: torrentFileURL
+                )
+            )
+            manifestTorrents.append(
+                PersistentStateManifestTorrent(
+                    id: status.id,
+                    name: status.name,
+                    source: status.source,
+                    downloadDirectory: status.downloadDirectory ?? defaultSaveDirectory(),
+                    desiredState: status.state == .paused ? .paused : .running,
+                    addedAt: status.addedAt,
+                    updatedAt: status.updatedAt,
+                    resumeDataFileName: resumeDataURL?.lastPathComponent,
+                    torrentFileName: torrentFileURL?.lastPathComponent
+                )
+            )
+        }
+
+        let manifest = PersistentStateManifest(
+            configuration: exportContext.configuration,
+            torrents: manifestTorrents
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+
+        let manifestData = try encoder.encode(manifest)
+        let manifestURL = persistentStateManifestURL()
+        try manifestData.write(to: manifestURL, options: .atomic)
+        try cleanupPersistentStateArtifacts(for: manifest)
+
+        await sessionStorage.applyPersistentArtifacts(trackedArtifacts)
+
+        let endRevision = await sessionStorage.persistentStateRevisionValue()
+        lastPersistedPersistentStateRevision = exportContext.revision
+        if endRevision == exportContext.revision {
+            configuration = exportContext.configuration
+        } else {
+            configuration = await sessionStorage.configuration
+        }
+
+        return manifestURL
     }
 
-    @discardableResult
-    public func restoreResumeSnapshot(named name: String = "default") async throws -> ResumeDataSnapshot {
-        let snapshotURL = snapshotFileURL(for: name)
-        let snapshotData = try Data(contentsOf: snapshotURL)
-        try await sessionStorage.restoreResumeData(from: snapshotData)
+    public func restorePersistentState() async throws -> PersistentStateRestoreReport {
+        let manifestURL = persistentStateManifestURL()
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            return PersistentStateRestoreReport(entries: [])
+        }
 
+        let manifestData = try Data(contentsOf: manifestURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(ResumeDataSnapshot.self, from: snapshotData)
+        let manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+        guard manifest.version == PersistentStateManifest.currentVersion else {
+            throw LibtorrentAppleError.resumeDataDecodingFailed(
+                "Unsupported persistent state version \(manifest.version)."
+            )
+        }
+
+        let candidates = manifest.torrents.map { torrent in
+            PersistentStateRestoreCandidate(
+                manifestTorrent: torrent,
+                resumeDataURL: resolvePersistentArtifactURL(
+                    fileName: torrent.resumeDataFileName,
+                    in: persistentResumeDataDirectoryURL()
+                ),
+                torrentFileURL: resolvePersistentArtifactURL(
+                    fileName: torrent.torrentFileName,
+                    in: persistentTorrentStateFilesDirectoryURL()
+                )
+            )
+        }
+
+        let report = try await sessionStorage.restorePersistentState(
+            configuration: manifest.configuration,
+            candidates: candidates
+        )
+        configuration = await sessionStorage.configuration
+        lastPersistedPersistentStateRevision = await sessionStorage.persistentStateRevisionValue()
+        return report
+    }
+
+    public func hasPendingPersistentStateChanges() async -> Bool {
+        await sessionStorage.persistentStateRevisionValue() != lastPersistedPersistentStateRevision
+    }
+
+    public func schedulePersistentStateSave(
+        debounceInterval: TimeInterval = 0.5
+    ) async {
+        persistentStateSaveTask?.cancel()
+        let downloader = self
+        persistentStateSaveTask = Task {
+            do {
+                try await AsyncTiming.sleep(seconds: debounceInterval)
+            } catch {
+                return nil
+            }
+
+            return try? await downloader.flushScheduledPersistentStateSave()
+        }
     }
 
     @discardableResult
-    public func restoreLatestResumeSnapshot() async throws -> URL? {
-        let snapshots = try persistedResumeSnapshots()
-        guard let latest = snapshots.last else {
+    public func flushScheduledPersistentStateSave() async throws -> URL? {
+        persistentStateSaveTask = nil
+        guard await hasPendingPersistentStateChanges() else {
             return nil
         }
 
-        let data = try Data(contentsOf: latest)
-        try await sessionStorage.restoreResumeData(from: data)
-        return latest
-    }
-
-    public func persistedResumeSnapshots() throws -> [URL] {
-        try sortedFiles(in: snapshotsDirectoryURL(), pathExtension: "json")
+        return try await savePersistentState()
     }
 
     public func managedTorrentFiles() throws -> [URL] {
@@ -349,22 +459,54 @@ public actor TorrentDownloader {
         try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: defaultSaveDirectory(), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: torrentFilesDirectoryURL(), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: snapshotsDirectoryURL(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: persistentStateDirectoryURL(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: persistentResumeDataDirectoryURL(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: persistentTorrentStateFilesDirectoryURL(), withIntermediateDirectories: true)
     }
 
     private func torrentFilesDirectoryURL() -> URL {
         rootDirectory.appendingPathComponent("TorrentFiles", isDirectory: true).standardizedFileURL
     }
 
-    private func snapshotsDirectoryURL() -> URL {
-        rootDirectory.appendingPathComponent("Snapshots", isDirectory: true).standardizedFileURL
+    private func persistentStateDirectoryURL() -> URL {
+        rootDirectory.appendingPathComponent("PersistentState", isDirectory: true).standardizedFileURL
     }
 
-    private func snapshotFileURL(for name: String) -> URL {
-        let sanitizedName = sanitizeFileStem(name.isEmpty ? "default" : name)
-        return snapshotsDirectoryURL()
-            .appendingPathComponent("\(sanitizedName).json")
+    private func persistentStateManifestURL() -> URL {
+        persistentStateDirectoryURL().appendingPathComponent("manifest.json").standardizedFileURL
+    }
+
+    private func persistentResumeDataDirectoryURL() -> URL {
+        persistentStateDirectoryURL().appendingPathComponent("ResumeData", isDirectory: true).standardizedFileURL
+    }
+
+    private func persistentTorrentStateFilesDirectoryURL() -> URL {
+        persistentStateDirectoryURL().appendingPathComponent("TorrentFiles", isDirectory: true).standardizedFileURL
+    }
+
+    private func persistentResumeDataArtifactURL(for id: TorrentID) -> URL {
+        persistentResumeDataDirectoryURL()
+            .appendingPathComponent("\(id.rawValue).resume")
             .standardizedFileURL
+    }
+
+    private func persistentTorrentFileArtifactURL(for id: TorrentID) -> URL {
+        persistentTorrentStateFilesDirectoryURL()
+            .appendingPathComponent("\(id.rawValue).torrent")
+            .standardizedFileURL
+    }
+
+    private func resolvePersistentArtifactURL(fileName: String?, in directory: URL) -> URL? {
+        guard let fileName, !fileName.isEmpty else {
+            return nil
+        }
+
+        let url = directory.appendingPathComponent(fileName).standardizedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+
+        return url
     }
 
     private func persistEncodedTorrent(_ encodedTorrent: EncodedTorrentInfo) throws -> URL {
@@ -382,6 +524,120 @@ public actor TorrentDownloader {
             .standardizedFileURL
         try encodedTorrent.data.write(to: fileURL, options: .atomic)
         return fileURL
+    }
+
+    private func persistResumeDataArtifact(
+        for status: TorrentStatus,
+        handle: TorrentHandle?,
+        existingArtifactURL: URL?
+    ) async throws -> URL? {
+        let artifactURL = persistentResumeDataArtifactURL(for: status.id)
+
+        if let handle {
+            do {
+                let nativeResumeData = try await handle.exportResumeData()
+                try nativeResumeData.write(to: artifactURL, options: .atomic)
+                return artifactURL
+            } catch {
+                // Fall back to the last good artifact when the session is not running or export fails.
+            }
+        }
+
+        return try copyPersistentArtifactIfAvailable(from: existingArtifactURL, to: artifactURL)
+    }
+
+    private func persistTorrentFileArtifact(
+        for status: TorrentStatus,
+        handle: TorrentHandle?,
+        existingArtifactURL: URL?
+    ) async throws -> URL? {
+        let artifactURL = persistentTorrentFileArtifactURL(for: status.id)
+
+        if let handle {
+            do {
+                let torrentFileData = try await handle.exportTorrentFile()
+                try torrentFileData.write(to: artifactURL, options: .atomic)
+                return artifactURL
+            } catch let error as LibtorrentAppleError {
+                if case .metadataUnavailable = error {
+                    // Fall through to persisted/local .torrent fallbacks.
+                }
+            } catch {
+                // Fall through to persisted/local .torrent fallbacks.
+            }
+        }
+
+        if let copiedArtifactURL = try copyPersistentArtifactIfAvailable(from: existingArtifactURL, to: artifactURL) {
+            return copiedArtifactURL
+        }
+
+        if status.source.kind == .torrentFile,
+           status.source.location.isFileURL,
+           FileManager.default.fileExists(atPath: status.source.location.path)
+        {
+            return try copyPersistentArtifact(from: status.source.location, to: artifactURL)
+        }
+
+        return nil
+    }
+
+    private func copyPersistentArtifactIfAvailable(
+        from sourceURL: URL?,
+        to destinationURL: URL
+    ) throws -> URL? {
+        guard let sourceURL,
+              FileManager.default.fileExists(atPath: sourceURL.path)
+        else {
+            return nil
+        }
+
+        return try copyPersistentArtifact(from: sourceURL, to: destinationURL)
+    }
+
+    private func copyPersistentArtifact(
+        from sourceURL: URL,
+        to destinationURL: URL
+    ) throws -> URL {
+        if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
+            return destinationURL
+        }
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
+    }
+
+    private func cleanupPersistentStateArtifacts(for manifest: PersistentStateManifest) throws {
+        let expectedResumeDataFiles = Set(manifest.torrents.compactMap(\.resumeDataFileName))
+        let expectedTorrentFiles = Set(manifest.torrents.compactMap(\.torrentFileName))
+
+        try removeUnexpectedArtifacts(
+            in: persistentResumeDataDirectoryURL(),
+            expectedFileNames: expectedResumeDataFiles
+        )
+        try removeUnexpectedArtifacts(
+            in: persistentTorrentStateFilesDirectoryURL(),
+            expectedFileNames: expectedTorrentFiles
+        )
+    }
+
+    private func removeUnexpectedArtifacts(
+        in directory: URL,
+        expectedFileNames: Set<String>
+    ) throws {
+        guard FileManager.default.fileExists(atPath: directory.path) else {
+            return
+        }
+
+        for url in try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) where !expectedFileNames.contains(url.lastPathComponent) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     private func sortedFiles(in directory: URL, pathExtension: String) throws -> [URL] {
