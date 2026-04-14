@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.7")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.8-alpha.1")
 ```
 
 导入模块：
@@ -249,7 +249,7 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.7
+./scripts/make-xcframework.sh 0.2.8-alpha.1
 ```
 
 验证 local-binary mode：
@@ -264,7 +264,7 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-运行本地 benchmark demo（v0.2.7 P0-0）：
+运行本地 benchmark demo（v0.2.8-alpha.1 P0-0）：
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -298,14 +298,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.7
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.7
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.8-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.8-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.7
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.8-alpha.1
 ```
 
 ## Release 与 SwiftPM 的关系

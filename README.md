@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.7")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.8-alpha.1")
 ```
 
 Then import:
@@ -321,7 +321,7 @@ Build the Apple frameworks:
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.7
+./scripts/make-xcframework.sh 0.2.8-alpha.1
 ```
 
 Validate local binary mode:
@@ -336,7 +336,7 @@ Validate remote binary mode:
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
-Run the local benchmark demo (v0.2.7 P0-0):
+Run the local benchmark demo (v0.2.8-alpha.1 P0-0):
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -406,14 +406,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.7
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.7
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.8-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.8-alpha.1
 ```
 
 Override both dependencies in one release build:
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.7
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.8-alpha.1
 ```
 
 ## Release Model
