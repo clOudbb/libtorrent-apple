@@ -218,28 +218,22 @@ _ = try await downloader.handleSystemWakeupDetected()
 
 ## 本地构建与验证
 
-### Package Mode 与推荐顺序
+### 公开包与维护者验证路径
 
-下游 App 依赖时，推荐优先级如下：
+对下游 App 来说，公开 SwiftPM 包现在只保留 `remote-binary` 一条消费路径。
 
-1. `remote-binary`（最推荐）
-2. `local-binary`
-3. `source`（不推荐用于生产）
+- 下游始终解析 `PackageSupport/BinaryArtifact.env` 指向的 GitHub Release XCFramework。
+- 这样可以让同一个版本只对应一套依赖图，减少 source/local-binary 带来的缓存漂移。
 
-各模式说明：
+仅供维护者使用的验证路径：
 
-- `remote-binary`（推荐）：SwiftPM 直接下载 `PackageSupport/BinaryArtifact.env` 指向的 GitHub Release XCFramework。
-  这是最接近真实下游集成的路径，不需要本地 C/C++ 构建，CI 成本最低。
-- `local-binary`：加载本仓库脚本产出的 `Artifacts/release/LibtorrentAppleBinary.xcframework`。
-  适合发版前在本地先做“与生产等价”的行为验证，再上传 Release 产物。
-- `source`（不推荐用于生产）：编译仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），适合 API 开发和快速迭代。
-  当前问题是：这条链路与最终发布的 binary 产物不是同一套打包/链接路径，source 模式结果不能作为下游最终吞吐验收依据。
-  一个已发生过的漂移案例：早期版本里 binary 模式的 Swift 包装层曾直接禁掉 `applyConfiguration`，而 native bridge 实际已支持运行时限速更新；该问题已修复并包含在 `0.2.4`，但也说明 source/binary 一致性必须在 binary 模式下验收。
+- `source`：编译仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），适合 API 开发和快速迭代。
+- `local-binary`：加载本仓库脚本产出的 `Artifacts/release/LibtorrentAppleBinary.xcframework`，适合发版前做与生产等价的行为验证。
 
-验证 source mode：
+验证 source dev package：
 
 ```bash
-./scripts/validate-swift-package.sh source
+./scripts/validate-dev-package.sh source
 ```
 
 构建 Apple 平台产物：
@@ -252,13 +246,13 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/make-xcframework.sh 0.2.8-alpha.1
 ```
 
-验证 local-binary mode：
+验证 local-binary dev package：
 
 ```bash
-./scripts/validate-swift-package.sh local-binary
+./scripts/validate-dev-package.sh local-binary
 ```
 
-验证 remote-binary mode：
+验证公开 remote-binary 包：
 
 ```bash
 ./scripts/validate-swift-package.sh remote-binary
@@ -283,6 +277,11 @@ demo 会输出：
 - `torrent_samples.csv`
 - `summary.json`
 - `samples.json`
+
+### 发布路径
+
+- 手动发布：先执行 `./scripts/release.sh <version>`，提交 `PackageSupport/BinaryArtifact.env`，创建并推送 tag，再手动上传产物，或者执行 `./scripts/publish-github-release.sh <version>` 自动创建 GitHub Release。
+- GitHub 自动发布：`Release` workflow 会执行同一套 prepare 流程，提交 `PackageSupport/BinaryArtifact.env`、创建并推送 tag、发布 GitHub Release，并在最后执行 `remote-binary` 验证。
 
 ## 指定其他 upstream 版本构建
 

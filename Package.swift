@@ -3,12 +3,6 @@
 import Foundation
 import PackageDescription
 
-enum PackageMode: String {
-    case source
-    case localBinary = "local-binary"
-    case remoteBinary = "remote-binary"
-}
-
 struct BinaryArtifactConfiguration {
     let frameworkName: String
     let downloadURL: String
@@ -54,56 +48,26 @@ func loadBinaryArtifactConfiguration() -> BinaryArtifactConfiguration? {
     )
 }
 
-let environment = ProcessInfo.processInfo.environment
-let requestedMode = PackageMode(rawValue: environment["LIBTORRENT_APPLE_PACKAGE_MODE"] ?? "")
-let binaryArtifactConfiguration = loadBinaryArtifactConfiguration()
-
-let packageMode: PackageMode = {
-    switch requestedMode {
-    case .source:
-        return .source
-    case .localBinary:
-        return .localBinary
-    case .remoteBinary:
-        return binaryArtifactConfiguration == nil ? .source : .remoteBinary
-    case nil:
-        return binaryArtifactConfiguration == nil ? .source : .remoteBinary
-    }
-}()
-
-var targets: [Target] = []
-let bridgeDependencyName: String
-
-switch packageMode {
-case .source:
-    bridgeDependencyName = "LibtorrentAppleBridge"
-    targets.append(
-        .target(
-            name: bridgeDependencyName,
-            path: "Sources/LibtorrentAppleBridge",
-            publicHeadersPath: "include"
-        )
-    )
-case .localBinary:
-    let frameworkName = binaryArtifactConfiguration?.frameworkName ?? "LibtorrentAppleBinary"
-    bridgeDependencyName = frameworkName
-    targets.append(
-        .binaryTarget(
-            name: frameworkName,
-            path: "Artifacts/release/\(frameworkName).xcframework"
-        )
-    )
-case .remoteBinary:
-    let config = binaryArtifactConfiguration!
-    bridgeDependencyName = config.frameworkName
-    targets.append(
-        .binaryTarget(
-            name: config.frameworkName,
-            url: config.downloadURL,
-            checksum: config.checksum
-        )
+guard let binaryArtifactConfiguration = loadBinaryArtifactConfiguration() else {
+    fatalError(
+        """
+        PackageSupport/BinaryArtifact.env is missing or incomplete.
+        The public SwiftPM package is remote-binary-only.
+        Maintainers should use scripts/validate-dev-package.sh for source/local-binary validation.
+        """
     )
 }
+
+var targets: [Target] = []
+let bridgeDependencyName = binaryArtifactConfiguration.frameworkName
+
+targets.append(
+    .binaryTarget(
+        name: binaryArtifactConfiguration.frameworkName,
+        url: binaryArtifactConfiguration.downloadURL,
+        checksum: binaryArtifactConfiguration.checksum
+    )
+)
 
 targets.append(
     .target(

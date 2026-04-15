@@ -1,12 +1,6 @@
 name: Release
 
 on:
-  # Disabled for now to keep binary artifact publishing single-sourced from
-  # local packaging + manual upload. Re-enable if/when the release process is
-  # redesigned into a checksum-safe staged workflow.
-  # push:
-  #   tags:
-  #     - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -33,9 +27,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate source package
+      - name: Validate source dev package
         run: |
-          ./scripts/validate-swift-package.sh source
+          ./scripts/validate-dev-package.sh source
 
       - name: Prepare scripts
         run: chmod +x scripts/*.sh
@@ -49,6 +43,16 @@ jobs:
             VERSION="${GITHUB_REF_NAME}"
           fi
           echo "RELEASE_VERSION=${VERSION#v}" >> "${GITHUB_ENV}"
+          echo "RELEASE_BRANCH=${GITHUB_REF_NAME}" >> "${GITHUB_ENV}"
+
+      - name: Checkout release branch
+        run: |
+          git checkout -B "${RELEASE_BRANCH}"
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Ensure CMake
         run: |
@@ -62,3 +66,34 @@ jobs:
             export LIBTORRENT_REF="${{ inputs.libtorrent_ref }}"
           fi
           ./scripts/release.sh "${RELEASE_VERSION}"
+
+      - name: Commit release metadata
+        run: |
+          if git diff --quiet -- PackageSupport/BinaryArtifact.env; then
+            echo "No tracked release metadata changes."
+          else
+            git add PackageSupport/BinaryArtifact.env
+            git commit -m "chore(release): prepare ${RELEASE_VERSION}"
+            git push origin "HEAD:${RELEASE_BRANCH}"
+          fi
+
+      - name: Create and push release tag
+        run: |
+          RELEASE_TAG="v${RELEASE_VERSION}"
+          git fetch --tags origin
+          if git rev-parse "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists." >&2
+            exit 1
+          fi
+          git tag -a "${RELEASE_TAG}" -m "${RELEASE_TAG}"
+          git push origin "${RELEASE_TAG}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/publish-github-release.sh "${RELEASE_VERSION}"
+
+      - name: Validate remote binary package
+        run: |
+          ./scripts/validate-swift-package.sh remote-binary

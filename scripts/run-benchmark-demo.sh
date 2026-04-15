@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mode="source"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+mode="local-binary"
 if [[ $# -gt 0 && "${1}" != --* ]]; then
   mode="$1"
   shift
@@ -17,6 +20,16 @@ case "${mode}" in
     ;;
 esac
 
-export LIBTORRENT_APPLE_PACKAGE_MODE="${mode}"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/libtorrent-apple-swift-clang-cache}"
-swift run --disable-sandbox LibtorrentAppleBenchmarkCLI "$@"
+export LIBTORRENT_APPLE_PACKAGE_MODE="${mode}"
+
+case "${mode}" in
+  source|local-binary)
+    package_path="$("${SCRIPT_DIR}/prepare-dev-package.sh" "${mode}")"
+    ;;
+  remote-binary)
+    package_path="${ROOT_DIR}"
+    ;;
+esac
+
+swift run --disable-sandbox --package-path "${package_path}" LibtorrentAppleBenchmarkCLI "$@"

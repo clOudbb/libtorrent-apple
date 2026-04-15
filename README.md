@@ -282,37 +282,35 @@ This version already includes:
 
 ## Build and Validate Locally
 
-### Package Modes and Recommendation
+### Public Package and Maintainer Validation
 
-Recommended dependency mode for downstream apps (highest priority first):
+The public SwiftPM package is `remote-binary-only`.
 
-1. `remote-binary` (recommended)
-2. `local-binary`
-3. `source` (not recommended for production)
+- Downstream apps always resolve the GitHub Release XCFramework declared by `PackageSupport/BinaryArtifact.env`.
+- This keeps the public package on a single dependency graph and avoids source/local-binary cache drift.
 
-Mode details:
+Maintainer-only validation paths:
 
-- `remote-binary` (recommended): SwiftPM downloads the Release XCFramework declared by `PackageSupport/BinaryArtifact.env`.
-  This is the closest path to real downstream integration, with no local C/C++ toolchain cost and minimal CI time.
-- `local-binary`: loads `Artifacts/release/LibtorrentAppleBinary.xcframework` built by this repo's scripts.
-  Use this for pre-release verification when you need production-equivalent behavior before uploading Release assets.
-- `source` (not recommended for production): compiles the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast iteration.
-  Current caveat: this path is a different packaging/linking route from shipped binary artifacts, so source-mode results cannot be used as final throughput acceptance for downstream apps.
-  A concrete drift example from earlier versions: binary-mode `applyConfiguration` was gated off in Swift wrapper even though the native bridge already supported runtime rate-limit apply; this is already fixed and included in `0.2.4`, but it shows why source and binary parity must be validated on binary mode.
+- `source`: compiles the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast iteration.
+- `local-binary`: loads `Artifacts/release/LibtorrentAppleBinary.xcframework` built by this repo's scripts for production-equivalent pre-release verification.
 
-Validate source mode:
+Validate source dev package:
 
 ```bash
-./scripts/validate-swift-package.sh source
+./scripts/validate-dev-package.sh source
 ```
 
-Validate all package modes in one command:
+Validate local binary dev package:
 
 ```bash
-./scripts/validate-swift-package.sh all
+./scripts/validate-dev-package.sh local-binary
 ```
 
-Note: `remote-binary` mode requires the published XCFramework to match current source headers/API.
+Validate the public package:
+
+```bash
+./scripts/validate-swift-package.sh remote-binary
+```
 
 Build the Apple frameworks:
 
@@ -322,18 +320,6 @@ Build the Apple frameworks:
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
 ./scripts/make-xcframework.sh 0.2.8-alpha.1
-```
-
-Validate local binary mode:
-
-```bash
-./scripts/validate-swift-package.sh local-binary
-```
-
-Validate remote binary mode:
-
-```bash
-./scripts/validate-swift-package.sh remote-binary
 ```
 
 Run the local benchmark demo (v0.2.8-alpha.1 P0-0):
@@ -355,6 +341,11 @@ The demo writes:
 - `torrent_samples.csv`
 - `summary.json`
 - `samples.json`
+
+### Release Paths
+
+- Manual release: run `./scripts/release.sh <version>`, commit `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated assets manually or publish with `./scripts/publish-github-release.sh <version>`.
+- GitHub automation: the `Release` workflow runs the same prepare flow, commits `PackageSupport/BinaryArtifact.env`, creates/pushes the tag, publishes the GitHub Release, and finishes with `remote-binary` validation.
 
 Run a fair A/B parity gate with enforced same sources, same trackers, and same time window:
 

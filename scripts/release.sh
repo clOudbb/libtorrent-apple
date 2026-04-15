@@ -25,20 +25,15 @@ fi
 VERSION="${VERSION_INPUT#v}"
 RELEASE_TAG="v${VERSION}"
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentAppleBinary}"
-IS_PRERELEASE=0
 
-if [[ "${VERSION}" == *-* ]]; then
-    IS_PRERELEASE=1
-fi
-
-"${SCRIPT_DIR}/validate-swift-package.sh" source
+"${SCRIPT_DIR}/validate-dev-package.sh" source
 "${SCRIPT_DIR}/sync-libtorrent.sh"
 "${SCRIPT_DIR}/sync-openssl.sh"
 "${SCRIPT_DIR}/build-apple-libs.sh"
 "${SCRIPT_DIR}/smoke-test-macos-framework.sh"
 "${SCRIPT_DIR}/make-xcframework.sh" "${VERSION}"
 "${SCRIPT_DIR}/write-release-metadata.sh" "${VERSION}"
-"${SCRIPT_DIR}/validate-swift-package.sh" local-binary
+"${SCRIPT_DIR}/validate-dev-package.sh" local-binary
 
 METADATA_PATH="${ROOT_DIR}/Artifacts/release/${FRAMEWORK_NAME}-${VERSION}.env"
 
@@ -51,69 +46,10 @@ set -a
 source "${METADATA_PATH}"
 set +a
 
-if ! command -v gh >/dev/null 2>&1; then
-    echo "gh CLI is not installed. Skipping GitHub Release upload."
-    echo "Artifact: ${ZIP_PATH}"
-    echo "Checksum: ${CHECKSUM}"
-    echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
-    echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
-    echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
-    exit 0
-fi
-
-if ! gh help release >/dev/null 2>&1; then
-    echo "gh CLI does not provide the release subcommand. Skipping GitHub Release upload."
-    echo "Artifact: ${ZIP_PATH}"
-    echo "Checksum: ${CHECKSUM}"
-    echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
-    echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
-    echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
-    exit 0
-fi
-
-if [[ -n "${GITHUB_TOKEN:-}" && -z "${GH_TOKEN:-}" ]]; then
-    export GH_TOKEN="${GITHUB_TOKEN}"
-fi
-
-if [[ -z "${GH_TOKEN:-}" ]]; then
-    echo "GH_TOKEN or GITHUB_TOKEN is not set. Skipping GitHub Release upload."
-    echo "Artifact: ${ZIP_PATH}"
-    echo "Checksum: ${CHECKSUM}"
-    echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
-    echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
-    echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
-    exit 0
-fi
-
-if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-    gh release edit "${RELEASE_TAG}" --notes-file "${RELEASE_NOTES_PATH}"
-    gh release upload \
-        "${RELEASE_TAG}" \
-        "${ZIP_PATH}" \
-        "${METADATA_PATH}" \
-        "${BINARY_TARGET_SNIPPET_PATH}" \
-        "${RELEASE_NOTES_PATH}" \
-        --clobber
-else
-    release_create_args=()
-    if [[ "${IS_PRERELEASE}" == "1" ]]; then
-        release_create_args+=(--prerelease)
-    fi
-
-    gh release create \
-        "${RELEASE_TAG}" \
-        "${ZIP_PATH}" \
-        "${METADATA_PATH}" \
-        "${BINARY_TARGET_SNIPPET_PATH}" \
-        "${RELEASE_NOTES_PATH}" \
-        "${release_create_args[@]}" \
-        --title "${RELEASE_TAG}" \
-        --notes-file "${RELEASE_NOTES_PATH}"
-fi
-
-echo "Published ${RELEASE_TAG}"
+echo "Prepared ${RELEASE_TAG}"
 echo "Artifact: ${ZIP_PATH}"
 echo "Checksum: ${CHECKSUM}"
 echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
 echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
 echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
+echo "Next: commit PackageSupport/BinaryArtifact.env, create/push ${RELEASE_TAG}, then publish assets manually or via scripts/publish-github-release.sh ${VERSION}."

@@ -314,9 +314,10 @@ mkdir -p "${PACKAGE_SUPPORT_DIR}"
 
 cat > "${PACKAGE_BINARY_ARTIFACT_CONFIG_PATH}" <<EOF
 # Managed by scripts/write-release-metadata.sh.
-# For local development:
-#   LIBTORRENT_APPLE_PACKAGE_MODE=source swift build
-#   LIBTORRENT_APPLE_PACKAGE_MODE=local-binary swift build
+# The public SwiftPM package is remote-binary-only.
+# Maintainers can validate internal source/local-binary flows with:
+#   ./scripts/validate-dev-package.sh source
+#   ./scripts/validate-dev-package.sh local-binary
 
 BINARY_FRAMEWORK_NAME=${FRAMEWORK_NAME}
 BINARY_ARTIFACT_VERSION=${VERSION}
