@@ -21,6 +21,7 @@ if [[ -f "${VERSIONS_FILE}" ]]; then
 fi
 
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}}"
+FRAMEWORK_BUNDLE_ID_PREFIX="${FRAMEWORK_BUNDLE_ID_PREFIX:-io.github.cloudbb}"
 IOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET:-15.0}"
 MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 BOOST_VERSION="${BOOST_VERSION:-1.76.0}"
@@ -86,6 +87,69 @@ resolve_absolute_path() {
 
     echo "error: path does not exist: ${input_path}" >&2
     exit 1
+}
+
+sanitize_bundle_identifier_component() {
+    local input="${1:-}"
+    local sanitized
+
+    sanitized="$(
+        printf '%s' "${input}" |
+            tr '[:upper:]' '[:lower:]' |
+            sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+    )"
+
+    if [[ -z "${sanitized}" ]]; then
+        echo "error: failed to sanitize bundle identifier component from '${input}'" >&2
+        exit 1
+    fi
+
+    if [[ "${sanitized}" =~ ^[0-9] ]]; then
+        sanitized="x-${sanitized}"
+    fi
+
+    printf '%s\n' "${sanitized}"
+}
+
+sanitize_bundle_identifier_prefix() {
+    local prefix="${1:-}"
+    local component
+    local sanitized_components=()
+
+    IFS='.' read -r -a components <<< "${prefix}"
+
+    for component in "${components[@]}"; do
+        [[ -n "${component}" ]] || continue
+        sanitized_components+=("$(sanitize_bundle_identifier_component "${component}")")
+    done
+
+    if [[ "${#sanitized_components[@]}" -eq 0 ]]; then
+        echo "error: failed to sanitize bundle identifier prefix from '${prefix}'" >&2
+        exit 1
+    fi
+
+    local joined
+    joined="${sanitized_components[0]}"
+    for component in "${sanitized_components[@]:1}"; do
+        joined="${joined}.${component}"
+    done
+
+    printf '%s\n' "${joined}"
+}
+
+framework_bundle_identifier_for_sdk() {
+    local framework_name="${1:-}"
+    local sdk="${2:-}"
+    local prefix="${3:-${FRAMEWORK_BUNDLE_ID_PREFIX}}"
+    local prefix_component
+    local framework_component
+    local sdk_component
+
+    prefix_component="$(sanitize_bundle_identifier_prefix "${prefix}")"
+    framework_component="$(sanitize_bundle_identifier_component "${framework_name}")"
+    sdk_component="$(sanitize_bundle_identifier_component "${sdk}")"
+
+    printf '%s.%s.%s\n' "${prefix_component}" "${framework_component}" "${sdk_component}"
 }
 
 prepare_boost_headers() {
@@ -525,6 +589,7 @@ write_framework_bundle() {
     local modules_dir
     local resources_dir
     local binary_path
+    local bundle_identifier
     local minimum_os_key="MinimumOSVersion"
 
     framework_dir="$(framework_dir_for_sdk "${sdk}")"
@@ -555,6 +620,8 @@ write_framework_bundle() {
 
         mkdir -p "${headers_dir}" "${modules_dir}"
     fi
+
+    bundle_identifier="$(framework_bundle_identifier_for_sdk "${FRAMEWORK_NAME}" "${sdk}" "${FRAMEWORK_BUNDLE_ID_PREFIX}")"
 
     if [[ "${#extra_archives[@]}" -gt 0 ]]; then
         local extra_archives_dir="${BUILD_DIR}/${sdk}/thinned-extra-archives"
@@ -596,7 +663,7 @@ EOF
     <key>CFBundleExecutable</key>
     <string>${FRAMEWORK_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.zhangzhenghong.${FRAMEWORK_NAME}.${sdk}</string>
+    <string>${bundle_identifier}</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -617,6 +684,8 @@ EOF
 SDK=${sdk}
 CONFIGURATION=${CONFIGURATION}
 FRAMEWORK_NAME=${FRAMEWORK_NAME}
+FRAMEWORK_BUNDLE_ID_PREFIX=${FRAMEWORK_BUNDLE_ID_PREFIX}
+FRAMEWORK_BUNDLE_IDENTIFIER=${bundle_identifier}
 FRAMEWORK_PATH=${framework_dir}
 LIBTORRENT_ARCHIVE=${libtorrent_archive}
 BRIDGE_ARCHIVE=${bridge_archive}
