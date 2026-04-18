@@ -18,7 +18,7 @@ if [[ -f "${VERSIONS_FILE}" ]]; then
     source "${VERSIONS_FILE}"
 fi
 
-FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentApple}"
+FRAMEWORK_NAME="${FRAMEWORK_NAME:-${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}}"
 HTTPS_TRACKER_BACKEND="${HTTPS_TRACKER_BACKEND:-openssl}"
 
 if [[ "${HTTPS_TRACKER_BACKEND}" != "openssl" ]]; then

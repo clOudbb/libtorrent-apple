@@ -1,12 +1,6 @@
 import Foundation
 
-#if canImport(LibtorrentAppleBinary)
-import LibtorrentAppleBinary
-#elseif canImport(LibtorrentAppleBridge)
 import LibtorrentAppleBridge
-#else
-#error("No libtorrent bridge module is available.")
-#endif
 
 typealias BridgeSessionHandle = OpaquePointer
 
@@ -124,16 +118,9 @@ enum BridgeRuntime {
         var nativeConfiguration = makeNativeSessionConfiguration(from: configuration)
         var nativeError = libtorrent_apple_error_t()
 
-        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         guard libtorrent_apple_session_apply_configuration(session, &nativeConfiguration, &nativeError) else {
             throw error(from: nativeError, fallbackMessage: "Failed to apply session configuration.")
         }
-        #else
-        throw LibtorrentAppleError.nativeOperationFailed(
-            -1,
-            "Runtime configuration apply is unavailable in the current binary bridge."
-        )
-        #endif
     }
 
     static func destroySession(_ session: BridgeSessionHandle?) {
@@ -279,7 +266,6 @@ enum BridgeRuntime {
     }
 
     static func sessionStats(session: BridgeSessionHandle) throws -> BridgeNativeSessionStats {
-        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         var nativeStats = libtorrent_apple_session_stats_t()
         var nativeError = libtorrent_apple_error_t()
 
@@ -296,12 +282,6 @@ enum BridgeRuntime {
             isDHTEnabled: nativeStats.dht_enabled,
             dhtNodeCount: Int(nativeStats.dht_node_count)
         )
-        #else
-        throw LibtorrentAppleError.nativeOperationFailed(
-            -1,
-            "Session diagnostics are unavailable in the current binary bridge."
-        )
-        #endif
     }
 
     @discardableResult
@@ -764,7 +744,6 @@ enum BridgeRuntime {
 
         var nativeError = libtorrent_apple_error_t()
 
-        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         let succeeded = id.rawValue.withCString { infoHash in
             nativeTrackers.withUnsafeMutableBufferPointer { buffer in
                 libtorrent_apple_torrent_add_trackers(
@@ -777,26 +756,6 @@ enum BridgeRuntime {
                 )
             }
         }
-        #else
-        guard forceReannounce else {
-            throw LibtorrentAppleError.nativeOperationFailed(
-                -1,
-                "Batch tracker add without reannounce is unavailable in the current binary bridge."
-            )
-        }
-
-        let succeeded = id.rawValue.withCString { infoHash in
-            nativeTrackers.withUnsafeMutableBufferPointer { buffer in
-                for index in buffer.indices {
-                    var nativeTracker = buffer[index]
-                    guard libtorrent_apple_torrent_add_tracker(session, infoHash, &nativeTracker, &nativeError) else {
-                        return false
-                    }
-                }
-                return true
-            }
-        }
-        #endif
 
         guard succeeded else {
             throw error(from: nativeError, fallbackMessage: "Failed to add torrent trackers.")
@@ -1088,14 +1047,11 @@ enum BridgeRuntime {
         encodeCString(configuration.userAgent, into: &nativeConfiguration.user_agent)
         encodeCString(configuration.handshakeClientVersion ?? "", into: &nativeConfiguration.handshake_client_version)
         encodeCString(configuration.listenInterfaces.joined(separator: ","), into: &nativeConfiguration.listen_interfaces)
-
-        #if canImport(LibtorrentAppleBridge) || canImport(LibtorrentAppleBinary)
         nativeConfiguration.share_ratio_limit = Int32(clamping: configuration.shareRatioLimit)
         encodeCString(configuration.peerFingerprint ?? "", into: &nativeConfiguration.peer_fingerprint)
         encodeCString(configuration.dhtBootstrapNodes.joined(separator: ","), into: &nativeConfiguration.dht_bootstrap_nodes)
         encodeCString(configuration.peerBlockedCIDRs.joined(separator: ","), into: &nativeConfiguration.peer_blocked_cidrs)
         encodeCString(configuration.peerAllowedCIDRs.joined(separator: ","), into: &nativeConfiguration.peer_allowed_cidrs)
-        #endif
 
         if let proxy = configuration.proxy {
             nativeConfiguration.proxy_type = proxy.type.rawValue

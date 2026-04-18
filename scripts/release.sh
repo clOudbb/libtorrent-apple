@@ -5,12 +5,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSIONS_FILE="${SCRIPT_DIR}/versions.env"
+PACKAGE_GENERATION_SCRIPT="${SCRIPT_DIR}/package-generation.sh"
 VERSION_INPUT="${1:-}"
 
 if [[ -f "${VERSIONS_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${VERSIONS_FILE}"
 fi
+
+# shellcheck disable=SC1090
+source "${PACKAGE_GENERATION_SCRIPT}"
 
 if [[ -z "${VERSION_INPUT}" ]]; then
     echo "usage: scripts/release.sh <version>" >&2
@@ -24,7 +28,9 @@ fi
 
 VERSION="${VERSION_INPUT#v}"
 RELEASE_TAG="v${VERSION}"
-FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentAppleBinary}"
+FRAMEWORK_BASENAME="${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}"
+FRAMEWORK_NAME="$(binary_framework_name_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")"
+export FRAMEWORK_NAME
 
 "${SCRIPT_DIR}/validate-dev-package.sh" source
 "${SCRIPT_DIR}/sync-libtorrent.sh"
@@ -49,7 +55,8 @@ set +a
 echo "Prepared ${RELEASE_TAG}"
 echo "Artifact: ${ZIP_PATH}"
 echo "Checksum: ${CHECKSUM}"
+echo "Binary framework/module: ${FRAMEWORK_NAME}"
 echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
 echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
 echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
-echo "Next: commit PackageSupport/BinaryArtifact.env, create/push ${RELEASE_TAG}, then publish assets manually or via scripts/publish-github-release.sh ${VERSION}."
+echo "Next: commit Package.swift, Sources/LibtorrentAppleBridgeCompat, PackageSupport/BinaryArtifact.env, create/push ${RELEASE_TAG}, then publish assets manually or via scripts/publish-github-release.sh ${VERSION}."

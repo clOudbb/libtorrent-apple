@@ -11,7 +11,7 @@ if [[ -f "${VERSIONS_FILE}" ]]; then
     source "${VERSIONS_FILE}"
 fi
 
-FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentApple}"
+FRAMEWORK_NAME="${FRAMEWORK_NAME:-${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}}"
 FRAMEWORK_DIR="${FRAMEWORK_DIR:-${ROOT_DIR}/Build/apple/macosx/${FRAMEWORK_NAME}.framework}"
 FRAMEWORK_BINARY_PATH="${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
 
@@ -36,8 +36,8 @@ fi
 tmpdir="$(mktemp -d /tmp/libtorrent-apple-smoke.XXXXXX)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-cat > "${tmpdir}/smoke.cpp" <<'EOF'
-#include <LibtorrentAppleBinary/LibtorrentAppleBinary.h>
+cat > "${tmpdir}/smoke.cpp" <<EOF
+#include <${FRAMEWORK_NAME}/LibtorrentAppleBinary.h>
 #include <stdio.h>
 
 int main(void) {

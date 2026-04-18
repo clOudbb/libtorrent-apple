@@ -12,6 +12,11 @@ on:
         required: false
         default: ""
         type: string
+      switch_validation_baseline_version:
+        description: Optional previously released version used for tag-switch validation
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -69,13 +74,20 @@ jobs:
 
       - name: Commit release metadata
         run: |
-          if git diff --quiet -- PackageSupport/BinaryArtifact.env; then
+          if [[ -z "$(git status --porcelain -- Package.swift PackageSupport/BinaryArtifact.env Sources/LibtorrentAppleBridgeCompat)" ]]; then
             echo "No tracked release metadata changes."
           else
-            git add PackageSupport/BinaryArtifact.env
+            git add Package.swift PackageSupport/BinaryArtifact.env Sources/LibtorrentAppleBridgeCompat
             git commit -m "chore(release): prepare ${RELEASE_VERSION}"
             git push origin "HEAD:${RELEASE_BRANCH}"
           fi
+
+      - name: Validate version switching before publication
+        if: ${{ inputs.switch_validation_baseline_version != '' }}
+        run: |
+          ./scripts/prepublish-validate-version-switch.sh \
+            --version-a "${{ inputs.switch_validation_baseline_version }}" \
+            --version-b "${RELEASE_VERSION}"
 
       - name: Create and push release tag
         run: |

@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSIONS_FILE="${SCRIPT_DIR}/versions.env"
+PACKAGE_GENERATION_SCRIPT="${SCRIPT_DIR}/package-generation.sh"
 ARTIFACTS_DIR="${ROOT_DIR}/Artifacts/release"
 PACKAGE_SUPPORT_DIR="${ROOT_DIR}/PackageSupport"
 LIBTORRENT_SOURCE_DIR="${LIBTORRENT_SOURCE_DIR:-${ROOT_DIR}/Vendor/libtorrent}"
@@ -23,13 +24,19 @@ if [[ -f "${VERSIONS_FILE}" ]]; then
     source "${VERSIONS_FILE}"
 fi
 
-FRAMEWORK_NAME="${FRAMEWORK_NAME:-LibtorrentApple}"
 VERSION="${VERSION_INPUT#v}"
 RELEASE_TAG="v${VERSION}"
+# shellcheck disable=SC1090
+source "${PACKAGE_GENERATION_SCRIPT}"
+
+FRAMEWORK_BASENAME="${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}"
+FRAMEWORK_NAME="${FRAMEWORK_NAME:-$(binary_framework_name_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")}"
 METADATA_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.env"
 BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.binary-target.swift"
 RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.release-notes.md"
 PACKAGE_BINARY_ARTIFACT_CONFIG_PATH="${PACKAGE_SUPPORT_DIR}/BinaryArtifact.env"
+PACKAGE_MANIFEST_PATH="${ROOT_DIR}/Package.swift"
+BRIDGE_COMPAT_TARGET_PATH="${ROOT_DIR}/Sources/LibtorrentAppleBridgeCompat"
 
 if [[ ! -f "${METADATA_PATH}" ]]; then
     echo "error: metadata file not found at ${METADATA_PATH}" >&2
@@ -39,6 +46,14 @@ fi
 set -a
 source "${METADATA_PATH}"
 set +a
+
+# Metadata files may contain absolute paths from the environment that created them.
+# Rebind all local output paths to the current repository before generating files.
+BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.binary-target.swift"
+RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.release-notes.md"
+PACKAGE_BINARY_ARTIFACT_CONFIG_PATH="${PACKAGE_SUPPORT_DIR}/BinaryArtifact.env"
+PACKAGE_MANIFEST_PATH="${ROOT_DIR}/Package.swift"
+BRIDGE_COMPAT_TARGET_PATH="${ROOT_DIR}/Sources/LibtorrentAppleBridgeCompat"
 
 if [[ -f "${SOURCE_METADATA_FILE}" ]]; then
     # shellcheck disable=SC1090
@@ -302,7 +317,9 @@ build_release_changelog() {
     GENERATED_EN_CHANGELOG="${en_body}"
 }
 
-if [[ -n "${REPOSITORY_SLUG}" ]]; then
+if [[ -n "${BINARY_ARTIFACT_BASE_URL:-}" ]]; then
+    DOWNLOAD_URL="${BINARY_ARTIFACT_BASE_URL%/}/releases/download/${RELEASE_TAG}/${FRAMEWORK_NAME}-${VERSION}.zip"
+elif [[ -n "${REPOSITORY_SLUG}" ]]; then
     DOWNLOAD_URL="https://github.com/${REPOSITORY_SLUG}/releases/download/${RELEASE_TAG}/${FRAMEWORK_NAME}-${VERSION}.zip"
 else
     DOWNLOAD_URL="<replace-with-your-github-release-url>"
@@ -311,10 +328,13 @@ fi
 build_release_changelog
 
 mkdir -p "${PACKAGE_SUPPORT_DIR}"
+write_bridge_compat_target "${BRIDGE_COMPAT_TARGET_PATH}" "${FRAMEWORK_NAME}"
+write_release_package_manifest "${PACKAGE_MANIFEST_PATH}" "${FRAMEWORK_NAME}" "${DOWNLOAD_URL}" "${CHECKSUM}"
 
 cat > "${PACKAGE_BINARY_ARTIFACT_CONFIG_PATH}" <<EOF
 # Managed by scripts/write-release-metadata.sh.
-# The public SwiftPM package is remote-binary-only.
+# Internal release metadata for maintainers.
+# The public SwiftPM package is described directly in Package.swift.
 # Maintainers can validate internal source/local-binary flows with:
 #   ./scripts/validate-dev-package.sh source
 #   ./scripts/validate-dev-package.sh local-binary
@@ -366,10 +386,12 @@ ${GENERATED_EN_CHANGELOG}
 
 - SwiftPM product exposed to apps: \`LibtorrentApple\`
 - Internal binary target used by the package: \`${FRAMEWORK_NAME}\`
+- Stable bridge target used by the package: \`LibtorrentAppleBridge\`
 - Required Apple system frameworks: ${REQUIRED_SYSTEM_FRAMEWORKS:-CFNetwork,CoreFoundation,Security,SystemConfiguration}
 - Required link libraries when integrating the raw framework manually: ${REQUIRED_LINK_LIBRARIES:-libc++}
 - Binary target snippet is attached as \`${FRAMEWORK_NAME}-${VERSION}.binary-target.swift\`
-- Package binary config updated at \`PackageSupport/BinaryArtifact.env\`
+- Public package manifest updated at \`Package.swift\`
+- Internal release metadata updated at \`PackageSupport/BinaryArtifact.env\`
 
 ## SwiftPM Snippet
 
@@ -384,8 +406,12 @@ DOWNLOAD_URL=${DOWNLOAD_URL}
 BINARY_TARGET_SNIPPET_PATH=${BINARY_TARGET_SNIPPET_PATH}
 RELEASE_NOTES_PATH=${RELEASE_NOTES_PATH}
 PACKAGE_BINARY_ARTIFACT_CONFIG_PATH=${PACKAGE_BINARY_ARTIFACT_CONFIG_PATH}
+PACKAGE_MANIFEST_PATH=${PACKAGE_MANIFEST_PATH}
+BRIDGE_COMPAT_TARGET_PATH=${BRIDGE_COMPAT_TARGET_PATH}
 EOF
 
 echo "Wrote ${BINARY_TARGET_SNIPPET_PATH}"
 echo "Wrote ${RELEASE_NOTES_PATH}"
 echo "Wrote ${PACKAGE_BINARY_ARTIFACT_CONFIG_PATH}"
+echo "Wrote ${PACKAGE_MANIFEST_PATH}"
+echo "Wrote ${BRIDGE_COMPAT_TARGET_PATH}"

@@ -6,24 +6,29 @@ let packageMode = "__PACKAGE_MODE__"
 let frameworkName = "__FRAMEWORK_NAME__"
 
 var targets: [Target] = []
-let bridgeDependencyName: String
 
 switch packageMode {
 case "source":
-    bridgeDependencyName = "LibtorrentAppleBridge"
     targets.append(
         .target(
-            name: bridgeDependencyName,
+            name: "LibtorrentAppleBridge",
             path: "Sources/LibtorrentAppleBridge",
             publicHeadersPath: "include"
         )
     )
 case "local-binary":
-    bridgeDependencyName = frameworkName
     targets.append(
         .binaryTarget(
             name: frameworkName,
             path: "Artifacts/release/\(frameworkName).xcframework"
+        )
+    )
+    targets.append(
+        .target(
+            name: "LibtorrentAppleBridge",
+            dependencies: [.target(name: frameworkName)],
+            path: "Sources/LibtorrentAppleBridgeCompat",
+            publicHeadersPath: "include"
         )
     )
 default:
@@ -33,7 +38,7 @@ default:
 targets.append(
     .target(
         name: "LibtorrentApple",
-        dependencies: [.target(name: bridgeDependencyName)],
+        dependencies: ["LibtorrentAppleBridge"],
         path: "Sources/LibtorrentApple",
         linkerSettings: [
             .linkedFramework("CFNetwork"),

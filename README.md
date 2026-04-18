@@ -286,13 +286,14 @@ This version already includes:
 
 The public SwiftPM package is `remote-binary-only`.
 
-- Downstream apps always resolve the GitHub Release XCFramework declared by `PackageSupport/BinaryArtifact.env`.
-- This keeps the public package on a single dependency graph and avoids source/local-binary cache drift.
+- Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
+- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_8_alpha_3`.
+- `PackageSupport/BinaryArtifact.env` is retained only as internal maintainer metadata; downstream SwiftPM consumers do not read it.
 
 Maintainer-only validation paths:
 
 - `source`: compiles the in-repo bootstrap bridge target (`Sources/LibtorrentAppleBridge`) for API development and fast iteration.
-- `local-binary`: loads `Artifacts/release/LibtorrentAppleBinary.xcframework` built by this repo's scripts for production-equivalent pre-release verification.
+- `local-binary`: loads the versioned XCFramework under `Artifacts/release/`, then routes `LibtorrentApple` through the generated compat bridge target at `Sources/LibtorrentAppleBridgeCompat` for production-equivalent pre-release verification.
 
 Validate source dev package:
 
@@ -311,6 +312,26 @@ Validate the public package:
 ```bash
 ./scripts/validate-swift-package.sh remote-binary
 ```
+
+Validate tag switching in one shared cache directory:
+
+```bash
+./scripts/validate-version-switch.sh \
+  --repo-url https://github.com/clOudbb/libtorrent-apple.git \
+  --version-a 0.2.8-alpha.2 \
+  --version-b 0.2.8-alpha.3
+```
+
+Run a full local self-verification using the current working tree plus a synthetic next release:
+
+```bash
+./scripts/self-verify-version-switch.sh \
+  --version-a 0.2.8-alpha.3 \
+  --version-b 0.2.8-alpha.4
+```
+
+Local self-verification rewrites the temporary validation tags to use `binaryTarget(path:)`.
+SwiftPM only accepts `https` for URL-based binary targets, so local tag-switch regression uses the same versioned XCFramework identity but avoids fake HTTP endpoints.
 
 Build the Apple frameworks:
 
@@ -344,8 +365,8 @@ The demo writes:
 
 ### Release Paths
 
-- Manual release: run `./scripts/release.sh <version>`, commit `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated assets manually or publish with `./scripts/publish-github-release.sh <version>`.
-- GitHub automation: the `Release` workflow runs the same prepare flow, commits `PackageSupport/BinaryArtifact.env`, creates/pushes the tag, publishes the GitHub Release, and finishes with `remote-binary` validation.
+- Manual release: run `./scripts/release.sh <version>`, commit `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated assets manually or publish with `./scripts/publish-github-release.sh <version>`.
+- GitHub automation: the `Release` workflow runs the same prepare flow, commits `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, creates/pushes the tag, publishes the GitHub Release, and finishes with remote-binary validation. If you provide a baseline version, it also runs the tag-switch validation gate.
 
 Run a fair A/B parity gate with enforced same sources, same trackers, and same time window:
 
@@ -414,11 +435,18 @@ The public SwiftPM package depends on a GitHub Release-hosted binary artifact.
 What SwiftPM actually needs:
 
 - the committed `Package.swift`
-- the committed `PackageSupport/BinaryArtifact.env`
-- the GitHub Release asset `LibtorrentAppleBinary-<version>.zip`
+- the committed `Sources/LibtorrentAppleBridgeCompat`
+- the GitHub Release asset `LibtorrentAppleBinary_<sanitized_version>-<version>.zip`
 
-The zip already contains the full `LibtorrentAppleBinary.xcframework`.
+The zip already contains the full versioned `.xcframework`.
 You do not upload standalone `.framework` directories for SwiftPM consumption.
+
+From `v0.2.8-alpha.3` onward:
+
+- every release gets a unique internal binary module/framework name
+- `Package.swift` is self-contained for downstream consumers
+- release assets are immutable and must not be overwritten
+- downstream stability is validated by switching `old -> new -> old` in one shared cache directory
 
 ## Tooling Requirements
 
@@ -438,12 +466,16 @@ brew install cmake
 ```text
 PackageSupport/
   BinaryArtifact.env
+ValidationFixtures/
+  SPMVersionSwitchConsumer/
 Sources/
   LibtorrentApple/
     Models/
     Errors/
     Session/
   LibtorrentAppleBridge/
+    include/
+  LibtorrentAppleBridgeCompat/
     include/
 NativeBridge/
 scripts/

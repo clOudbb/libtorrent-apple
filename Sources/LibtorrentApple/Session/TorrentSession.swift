@@ -1,10 +1,6 @@
 import Foundation
 
-#if canImport(LibtorrentAppleBinary)
-import LibtorrentAppleBinary
-#elseif canImport(LibtorrentAppleBridge)
 import LibtorrentAppleBridge
-#endif
 
 private struct TrackedTorrent: Sendable, Hashable, Codable {
     var source: TorrentSource

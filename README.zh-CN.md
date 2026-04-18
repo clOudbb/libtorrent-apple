@@ -222,13 +222,14 @@ _ = try await downloader.handleSystemWakeupDetected()
 
 对下游 App 来说，公开 SwiftPM 包现在只保留 `remote-binary` 一条消费路径。
 
-- 下游始终解析 `PackageSupport/BinaryArtifact.env` 指向的 GitHub Release XCFramework。
-- 这样可以让同一个版本只对应一套依赖图，减少 source/local-binary 带来的缓存漂移。
+- 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
+- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_8_alpha_3`。
+- `PackageSupport/BinaryArtifact.env` 只保留给维护者脚本使用，不再参与下游 SwiftPM 解析。
 
 仅供维护者使用的验证路径：
 
 - `source`：编译仓库内 bootstrap bridge target（`Sources/LibtorrentAppleBridge`），适合 API 开发和快速迭代。
-- `local-binary`：加载本仓库脚本产出的 `Artifacts/release/LibtorrentAppleBinary.xcframework`，适合发版前做与生产等价的行为验证。
+- `local-binary`：加载 `Artifacts/release/` 下的版本化 XCFramework，并通过生成的 `Sources/LibtorrentAppleBridgeCompat` 兼容桥接层做与生产等价的行为验证。
 
 验证 source dev package：
 
@@ -258,6 +259,26 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/validate-swift-package.sh remote-binary
 ```
 
+验证两个 tag 在同一缓存目录里来回切换：
+
+```bash
+./scripts/validate-version-switch.sh \
+  --repo-url https://github.com/clOudbb/libtorrent-apple.git \
+  --version-a 0.2.8-alpha.2 \
+  --version-b 0.2.8-alpha.3
+```
+
+用当前工作区做一次完整的本地自验：
+
+```bash
+./scripts/self-verify-version-switch.sh \
+  --version-a 0.2.8-alpha.3 \
+  --version-b 0.2.8-alpha.4
+```
+
+本地自验会把临时验证 tag 改写成 `binaryTarget(path:)`。
+原因是 SwiftPM 对 URL 形式的 binary target 只接受 `https`，所以本地回归仍然验证同一套版本化 XCFramework 身份，只是不再伪造 HTTP 下载地址。
+
 运行本地 benchmark demo（v0.2.8-alpha.1 P0-0）：
 
 ```bash
@@ -280,8 +301,8 @@ demo 会输出：
 
 ### 发布路径
 
-- 手动发布：先执行 `./scripts/release.sh <version>`，提交 `PackageSupport/BinaryArtifact.env`，创建并推送 tag，再手动上传产物，或者执行 `./scripts/publish-github-release.sh <version>` 自动创建 GitHub Release。
-- GitHub 自动发布：`Release` workflow 会执行同一套 prepare 流程，提交 `PackageSupport/BinaryArtifact.env`、创建并推送 tag、发布 GitHub Release，并在最后执行 `remote-binary` 验证。
+- 手动发布：先执行 `./scripts/release.sh <version>`，提交 `Package.swift`、`Sources/LibtorrentAppleBridgeCompat`、`PackageSupport/BinaryArtifact.env`，创建并推送 tag，再手动上传产物，或者执行 `./scripts/publish-github-release.sh <version>` 自动创建 GitHub Release。
+- GitHub 自动发布：`Release` workflow 会执行同一套 prepare 流程，提交 `Package.swift`、`Sources/LibtorrentAppleBridgeCompat`、`PackageSupport/BinaryArtifact.env`，创建并推送 tag、发布 GitHub Release，并在最后执行 remote-binary 验证；如果提供 baseline 版本，还会额外执行 tag 切换验证。
 
 ## 指定其他 upstream 版本构建
 
@@ -314,11 +335,18 @@ SwiftPM 真正依赖的是 GitHub Release 上的二进制 zip。
 对 SwiftPM 来说，真正必须的是：
 
 - 仓库里的 `Package.swift`
-- 仓库里的 `PackageSupport/BinaryArtifact.env`
-- GitHub Release 上的 `LibtorrentAppleBinary-<version>.zip`
+- 仓库里的 `Sources/LibtorrentAppleBridgeCompat`
+- GitHub Release 上的 `LibtorrentAppleBinary_<sanitized_version>-<version>.zip`
 
-这个 zip 里已经包含完整的 `LibtorrentAppleBinary.xcframework`。  
+这个 zip 里已经包含完整的版本化 `.xcframework`。  
 所以给 SwiftPM 发版时，不需要单独上传 `.framework` 目录。
+
+从 `v0.2.8-alpha.3` 开始：
+
+- 每个 release 都拥有独立的内部 binary module/framework 名
+- 根 `Package.swift` 对下游消费完全自包含
+- release 资产不可覆盖，发现问题只能发新 tag
+- 下游稳定性通过 `旧版本 -> 新版本 -> 旧版本` 共用缓存回归验证
 
 ## 环境要求
 
@@ -338,12 +366,16 @@ brew install cmake
 ```text
 PackageSupport/
   BinaryArtifact.env
+ValidationFixtures/
+  SPMVersionSwitchConsumer/
 Sources/
   LibtorrentApple/
     Models/
     Errors/
     Session/
   LibtorrentAppleBridge/
+    include/
+  LibtorrentAppleBridgeCompat/
     include/
 NativeBridge/
 scripts/
