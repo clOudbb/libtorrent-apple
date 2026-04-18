@@ -1,104 +1,10 @@
 // swift-tools-version: 6.0
 
-import Foundation
 import PackageDescription
 
-struct BinaryArtifactConfiguration {
-    let frameworkName: String
-    let downloadURL: String
-    let checksum: String
-}
-
-func loadBinaryArtifactConfiguration() -> BinaryArtifactConfiguration? {
-    let configPath = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("PackageSupport/BinaryArtifact.env")
-
-    guard let contents = try? String(contentsOf: configPath, encoding: .utf8) else {
-        return nil
-    }
-
-    var values: [String: String] = [:]
-    for rawLine in contents.split(whereSeparator: \.isNewline) {
-        let line = rawLine.trimmingCharacters(in: .whitespaces)
-        guard !line.isEmpty, !line.hasPrefix("#"), let separator = line.firstIndex(of: "=") else {
-            continue
-        }
-
-        let key = String(line[..<separator]).trimmingCharacters(in: .whitespaces)
-        let value = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
-        values[key] = value
-    }
-
-    let frameworkName = values["BINARY_FRAMEWORK_NAME"] ?? "LibtorrentAppleBinary"
-
-    guard let downloadURL = values["BINARY_ARTIFACT_URL"],
-          !downloadURL.isEmpty,
-          !downloadURL.contains("<replace"),
-          let checksum = values["BINARY_ARTIFACT_CHECKSUM"],
-          !checksum.isEmpty
-    else {
-        return nil
-    }
-
-    return BinaryArtifactConfiguration(
-        frameworkName: frameworkName,
-        downloadURL: downloadURL,
-        checksum: checksum
-    )
-}
-
-guard let binaryArtifactConfiguration = loadBinaryArtifactConfiguration() else {
-    fatalError(
-        """
-        PackageSupport/BinaryArtifact.env is missing or incomplete.
-        The public SwiftPM package is remote-binary-only.
-        Maintainers should use scripts/validate-dev-package.sh for source/local-binary validation.
-        """
-    )
-}
-
-var targets: [Target] = []
-let bridgeDependencyName = binaryArtifactConfiguration.frameworkName
-
-targets.append(
-    .binaryTarget(
-        name: binaryArtifactConfiguration.frameworkName,
-        url: binaryArtifactConfiguration.downloadURL,
-        checksum: binaryArtifactConfiguration.checksum
-    )
-)
-
-targets.append(
-    .target(
-        name: "LibtorrentApple",
-        dependencies: [.target(name: bridgeDependencyName)],
-        path: "Sources/LibtorrentApple",
-        linkerSettings: [
-            .linkedFramework("CFNetwork"),
-            .linkedFramework("CoreFoundation"),
-            .linkedFramework("Security"),
-            .linkedFramework("SystemConfiguration"),
-            .linkedLibrary("c++"),
-        ]
-    )
-)
-
-targets.append(
-    .executableTarget(
-        name: "LibtorrentAppleBenchmarkCLI",
-        dependencies: ["LibtorrentApple"],
-        path: "Sources/LibtorrentAppleBenchmarkCLI"
-    )
-)
-
-targets.append(
-    .testTarget(
-        name: "LibtorrentAppleTests",
-        dependencies: ["LibtorrentApple"],
-        path: "Tests/LibtorrentAppleTests"
-    )
-)
+let binaryTargetName = "LibtorrentAppleBinary_0_2_8_alpha_3"
+let binaryTargetURL = "https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.8-alpha.3/LibtorrentAppleBinary_0_2_8_alpha_3-0.2.8-alpha.3.zip"
+let binaryTargetChecksum = "e0e33d7731d8959011100efd26e8d6af8111d966a8308af8152189d0a14aed22"
 
 let package = Package(
     name: "libtorrent-apple",
@@ -116,5 +22,39 @@ let package = Package(
             targets: ["LibtorrentAppleBenchmarkCLI"]
         ),
     ],
-    targets: targets
+    targets: [
+        .binaryTarget(
+            name: binaryTargetName,
+            url: binaryTargetURL,
+            checksum: binaryTargetChecksum
+        ),
+        .target(
+            name: "LibtorrentAppleBridge",
+            dependencies: [.target(name: binaryTargetName)],
+            path: "Sources/LibtorrentAppleBridgeCompat",
+            publicHeadersPath: "include"
+        ),
+        .target(
+            name: "LibtorrentApple",
+            dependencies: ["LibtorrentAppleBridge"],
+            path: "Sources/LibtorrentApple",
+            linkerSettings: [
+                .linkedFramework("CFNetwork"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Security"),
+                .linkedFramework("SystemConfiguration"),
+                .linkedLibrary("c++"),
+            ]
+        ),
+        .executableTarget(
+            name: "LibtorrentAppleBenchmarkCLI",
+            dependencies: ["LibtorrentApple"],
+            path: "Sources/LibtorrentAppleBenchmarkCLI"
+        ),
+        .testTarget(
+            name: "LibtorrentAppleTests",
+            dependencies: ["LibtorrentApple"],
+            path: "Tests/LibtorrentAppleTests"
+        ),
+    ]
 )
