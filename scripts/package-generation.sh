@@ -26,6 +26,13 @@ binary_framework_name_for_version() {
     printf '%s_%s\n' "${base_name}" "${sanitized_version}"
 }
 
+binary_artifact_basename_for_version() {
+    local version_input="${1:-}"
+    local base_name="${2:-LibtorrentAppleBinary}"
+
+    printf '%s-%s\n' "${base_name}" "${version_input#v}"
+}
+
 write_bridge_compat_target() {
     local output_dir="${1:-}"
     local framework_name="${2:-}"

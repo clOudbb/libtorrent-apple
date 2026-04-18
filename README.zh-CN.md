@@ -301,7 +301,7 @@ demo 会输出：
 
 ### 发布路径
 
-- 手动发布：先执行 `./scripts/release.sh <version>`，提交 `Package.swift`、`Sources/LibtorrentAppleBridgeCompat`、`PackageSupport/BinaryArtifact.env`，创建并推送 tag，再手动上传产物，或者执行 `./scripts/publish-github-release.sh <version>` 自动创建 GitHub Release。
+- 手动发布：先执行 `./scripts/release.sh <version>`，提交 `Package.swift`、`Sources/LibtorrentAppleBridgeCompat`、`PackageSupport/BinaryArtifact.env`，创建并推送 tag，再手动上传生成的 zip，或者执行 `./scripts/publish-github-release.sh <version>` 自动创建 GitHub Release。
 - GitHub 自动发布：`Release` workflow 会执行同一套 prepare 流程，提交 `Package.swift`、`Sources/LibtorrentAppleBridgeCompat`、`PackageSupport/BinaryArtifact.env`，创建并推送 tag、发布 GitHub Release，并在最后执行 remote-binary 验证；如果提供 baseline 版本，还会额外执行 tag 切换验证。
 
 ## 指定其他 upstream 版本构建
@@ -336,7 +336,7 @@ SwiftPM 真正依赖的是 GitHub Release 上的二进制 zip。
 
 - 仓库里的 `Package.swift`
 - 仓库里的 `Sources/LibtorrentAppleBridgeCompat`
-- GitHub Release 上的 `LibtorrentAppleBinary_<sanitized_version>-<version>.zip`
+- GitHub Release 上的 `LibtorrentAppleBinary-<version>.zip`
 
 这个 zip 里已经包含完整的版本化 `.xcframework`。  
 所以给 SwiftPM 发版时，不需要单独上传 `.framework` 目录。

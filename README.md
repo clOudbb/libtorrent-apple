@@ -365,7 +365,7 @@ The demo writes:
 
 ### Release Paths
 
-- Manual release: run `./scripts/release.sh <version>`, commit `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated assets manually or publish with `./scripts/publish-github-release.sh <version>`.
+- Manual release: run `./scripts/release.sh <version>`, commit `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated zip manually or publish with `./scripts/publish-github-release.sh <version>`.
 - GitHub automation: the `Release` workflow runs the same prepare flow, commits `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, creates/pushes the tag, publishes the GitHub Release, and finishes with remote-binary validation. If you provide a baseline version, it also runs the tag-switch validation gate.
 
 Run a fair A/B parity gate with enforced same sources, same trackers, and same time window:
@@ -436,7 +436,7 @@ What SwiftPM actually needs:
 
 - the committed `Package.swift`
 - the committed `Sources/LibtorrentAppleBridgeCompat`
-- the GitHub Release asset `LibtorrentAppleBinary_<sanitized_version>-<version>.zip`
+- the GitHub Release asset `LibtorrentAppleBinary-<version>.zip`
 
 The zip already contains the full versioned `.xcframework`.
 You do not upload standalone `.framework` directories for SwiftPM consumption.

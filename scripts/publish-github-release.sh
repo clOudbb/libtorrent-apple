@@ -30,7 +30,8 @@ VERSION="${VERSION_INPUT#v}"
 RELEASE_TAG="v${VERSION}"
 FRAMEWORK_BASENAME="${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}"
 FRAMEWORK_NAME="$(binary_framework_name_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")"
-METADATA_PATH="${ROOT_DIR}/Artifacts/release/${FRAMEWORK_NAME}-${VERSION}.env"
+ARTIFACT_BASENAME="$(binary_artifact_basename_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")"
+METADATA_PATH="${ROOT_DIR}/Artifacts/release/${ARTIFACT_BASENAME}.env"
 IS_PRERELEASE=0
 
 if [[ "${VERSION}" == *-* ]]; then
@@ -91,18 +92,12 @@ ensure_release_assets_are_new() {
 if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
     ensure_release_assets_are_new \
         "${RELEASE_TAG}" \
-        "$(basename "${ZIP_PATH}")" \
-        "$(basename "${METADATA_PATH}")" \
-        "$(basename "${BINARY_TARGET_SNIPPET_PATH}")" \
-        "$(basename "${RELEASE_NOTES_PATH}")"
+        "$(basename "${ZIP_PATH}")"
 
     gh release edit "${RELEASE_TAG}" --notes-file "${RELEASE_NOTES_PATH}"
     gh release upload \
         "${RELEASE_TAG}" \
-        "${ZIP_PATH}" \
-        "${METADATA_PATH}" \
-        "${BINARY_TARGET_SNIPPET_PATH}" \
-        "${RELEASE_NOTES_PATH}"
+        "${ZIP_PATH}"
 else
     release_create_args=()
     if [[ "${IS_PRERELEASE}" == "1" ]]; then
@@ -112,9 +107,6 @@ else
     gh release create \
         "${RELEASE_TAG}" \
         "${ZIP_PATH}" \
-        "${METADATA_PATH}" \
-        "${BINARY_TARGET_SNIPPET_PATH}" \
-        "${RELEASE_NOTES_PATH}" \
         "${release_create_args[@]}" \
         --title "${RELEASE_TAG}" \
         --notes-file "${RELEASE_NOTES_PATH}"
@@ -123,4 +115,4 @@ fi
 echo "Published ${RELEASE_TAG}"
 echo "Artifact: ${ZIP_PATH}"
 echo "Checksum: ${CHECKSUM}"
-echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
+echo "Release notes source: ${RELEASE_NOTES_PATH}"

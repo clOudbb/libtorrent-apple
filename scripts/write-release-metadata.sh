@@ -31,9 +31,10 @@ source "${PACKAGE_GENERATION_SCRIPT}"
 
 FRAMEWORK_BASENAME="${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}"
 FRAMEWORK_NAME="${FRAMEWORK_NAME:-$(binary_framework_name_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")}"
-METADATA_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.env"
-BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.binary-target.swift"
-RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.release-notes.md"
+ARTIFACT_BASENAME="${ARTIFACT_BASENAME:-$(binary_artifact_basename_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")}"
+METADATA_PATH="${ARTIFACTS_DIR}/${ARTIFACT_BASENAME}.env"
+BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${ARTIFACT_BASENAME}.binary-target.swift"
+RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${ARTIFACT_BASENAME}.release-notes.md"
 PACKAGE_BINARY_ARTIFACT_CONFIG_PATH="${PACKAGE_SUPPORT_DIR}/BinaryArtifact.env"
 PACKAGE_MANIFEST_PATH="${ROOT_DIR}/Package.swift"
 BRIDGE_COMPAT_TARGET_PATH="${ROOT_DIR}/Sources/LibtorrentAppleBridgeCompat"
@@ -49,8 +50,8 @@ set +a
 
 # Metadata files may contain absolute paths from the environment that created them.
 # Rebind all local output paths to the current repository before generating files.
-BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.binary-target.swift"
-RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${FRAMEWORK_NAME}-${VERSION}.release-notes.md"
+BINARY_TARGET_SNIPPET_PATH="${ARTIFACTS_DIR}/${ARTIFACT_BASENAME}.binary-target.swift"
+RELEASE_NOTES_PATH="${ARTIFACTS_DIR}/${ARTIFACT_BASENAME}.release-notes.md"
 PACKAGE_BINARY_ARTIFACT_CONFIG_PATH="${PACKAGE_SUPPORT_DIR}/BinaryArtifact.env"
 PACKAGE_MANIFEST_PATH="${ROOT_DIR}/Package.swift"
 BRIDGE_COMPAT_TARGET_PATH="${ROOT_DIR}/Sources/LibtorrentAppleBridgeCompat"
@@ -318,9 +319,9 @@ build_release_changelog() {
 }
 
 if [[ -n "${BINARY_ARTIFACT_BASE_URL:-}" ]]; then
-    DOWNLOAD_URL="${BINARY_ARTIFACT_BASE_URL%/}/releases/download/${RELEASE_TAG}/${FRAMEWORK_NAME}-${VERSION}.zip"
+    DOWNLOAD_URL="${BINARY_ARTIFACT_BASE_URL%/}/releases/download/${RELEASE_TAG}/${ARTIFACT_BASENAME}.zip"
 elif [[ -n "${REPOSITORY_SLUG}" ]]; then
-    DOWNLOAD_URL="https://github.com/${REPOSITORY_SLUG}/releases/download/${RELEASE_TAG}/${FRAMEWORK_NAME}-${VERSION}.zip"
+    DOWNLOAD_URL="https://github.com/${REPOSITORY_SLUG}/releases/download/${RELEASE_TAG}/${ARTIFACT_BASENAME}.zip"
 else
     DOWNLOAD_URL="<replace-with-your-github-release-url>"
 fi
@@ -368,7 +369,7 @@ ${GENERATED_EN_CHANGELOG}
 
 ## Artifact
 
-- XCFramework zip: ${FRAMEWORK_NAME}-${VERSION}.zip
+- XCFramework zip: ${ARTIFACT_BASENAME}.zip
 - SwiftPM checksum: \`${CHECKSUM}\`
 
 ## Upstream Source
@@ -389,7 +390,7 @@ ${GENERATED_EN_CHANGELOG}
 - Stable bridge target used by the package: \`LibtorrentAppleBridge\`
 - Required Apple system frameworks: ${REQUIRED_SYSTEM_FRAMEWORKS:-CFNetwork,CoreFoundation,Security,SystemConfiguration}
 - Required link libraries when integrating the raw framework manually: ${REQUIRED_LINK_LIBRARIES:-libc++}
-- Binary target snippet is attached as \`${FRAMEWORK_NAME}-${VERSION}.binary-target.swift\`
+- Local binary target snippet generated at \`${ARTIFACT_BASENAME}.binary-target.swift\`
 - Public package manifest updated at \`Package.swift\`
 - Internal release metadata updated at \`PackageSupport/BinaryArtifact.env\`
 

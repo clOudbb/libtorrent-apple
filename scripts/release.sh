@@ -30,6 +30,7 @@ VERSION="${VERSION_INPUT#v}"
 RELEASE_TAG="v${VERSION}"
 FRAMEWORK_BASENAME="${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}"
 FRAMEWORK_NAME="$(binary_framework_name_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")"
+ARTIFACT_BASENAME="$(binary_artifact_basename_for_version "${VERSION}" "${FRAMEWORK_BASENAME}")"
 export FRAMEWORK_NAME
 
 "${SCRIPT_DIR}/validate-dev-package.sh" source
@@ -41,7 +42,7 @@ export FRAMEWORK_NAME
 "${SCRIPT_DIR}/write-release-metadata.sh" "${VERSION}"
 "${SCRIPT_DIR}/validate-dev-package.sh" local-binary
 
-METADATA_PATH="${ROOT_DIR}/Artifacts/release/${FRAMEWORK_NAME}-${VERSION}.env"
+METADATA_PATH="${ROOT_DIR}/Artifacts/release/${ARTIFACT_BASENAME}.env"
 
 if [[ ! -f "${METADATA_PATH}" ]]; then
     echo "error: artifact metadata not found at ${METADATA_PATH}" >&2
@@ -59,4 +60,4 @@ echo "Binary framework/module: ${FRAMEWORK_NAME}"
 echo "Binary target snippet: ${BINARY_TARGET_SNIPPET_PATH}"
 echo "Upstream libtorrent: ${LIBTORRENT_REF_RESOLVED:-unknown} (${LIBTORRENT_REPO_URL:-unknown})"
 echo "Upstream OpenSSL: ${OPENSSL_REF_RESOLVED:-unknown} (${OPENSSL_REPO_URL:-unknown})"
-echo "Next: commit Package.swift, Sources/LibtorrentAppleBridgeCompat, PackageSupport/BinaryArtifact.env, create/push ${RELEASE_TAG}, then publish assets manually or via scripts/publish-github-release.sh ${VERSION}."
+echo "Next: commit Package.swift, Sources/LibtorrentAppleBridgeCompat, PackageSupport/BinaryArtifact.env, create/push ${RELEASE_TAG}, then publish ${ARTIFACT_BASENAME}.zip manually or via scripts/publish-github-release.sh ${VERSION}."

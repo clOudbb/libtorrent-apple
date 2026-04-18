@@ -140,13 +140,14 @@ rm -rf \
 
 source "${VALIDATION_REPO}/scripts/package-generation.sh"
 FRAMEWORK_NAME_A="$(binary_framework_name_for_version "${VERSION_A}")"
+ARTIFACT_BASENAME_A="$(binary_artifact_basename_for_version "${VERSION_A}")"
 mkdir -p "${VALIDATION_REPO}/Artifacts/release"
 cp \
-    "${SOURCE_REPO}/Artifacts/release/${FRAMEWORK_NAME_A}-${VERSION_A}.zip" \
-    "${VALIDATION_REPO}/Artifacts/release/${FRAMEWORK_NAME_A}-${VERSION_A}.zip"
+    "${SOURCE_REPO}/Artifacts/release/${ARTIFACT_BASENAME_A}.zip" \
+    "${VALIDATION_REPO}/Artifacts/release/${ARTIFACT_BASENAME_A}.zip"
 cp \
-    "${SOURCE_REPO}/Artifacts/release/${FRAMEWORK_NAME_A}-${VERSION_A}.env" \
-    "${VALIDATION_REPO}/Artifacts/release/${FRAMEWORK_NAME_A}-${VERSION_A}.env"
+    "${SOURCE_REPO}/Artifacts/release/${ARTIFACT_BASENAME_A}.env" \
+    "${VALIDATION_REPO}/Artifacts/release/${ARTIFACT_BASENAME_A}.env"
 
 pushd "${VALIDATION_REPO}" >/dev/null
 
@@ -159,7 +160,7 @@ export BINARY_ARTIFACT_BASE_URL="http://127.0.0.1:${PORT}"
 ./scripts/write-release-metadata.sh "${VERSION_A}"
 rm -rf "Artifacts/release/${FRAMEWORK_NAME_A}.xcframework"
 ditto -x -k \
-    "Artifacts/release/${FRAMEWORK_NAME_A}-${VERSION_A}.zip" \
+    "Artifacts/release/${ARTIFACT_BASENAME_A}.zip" \
     "Artifacts/release"
 write_local_validation_package_manifest \
     "Package.swift" \
