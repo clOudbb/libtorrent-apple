@@ -1,9 +1,15 @@
-public enum SessionProfile: String, Sendable, Hashable, Codable {
+public enum SessionProfile: String, Sendable, Hashable, Codable, CaseIterable {
     case baseline
     case animekoParityV1 = "animekoParity.v1"
     case animekoParityV2 = "animekoParity.v2"
     case qBittorrentParityV1 = "qBittorrentParity.v1"
-    case beastV1 = "beast.v1"
+    case transmissionParityV1 = "transmissionParity.v1"
+
+    public static let throughputReferenceProfiles: [SessionProfile] = [
+        .animekoParityV2,
+        .qBittorrentParityV1,
+        .transmissionParityV1,
+    ]
 
     public var defaultConnectionsLimit: Int? {
         switch self {
@@ -15,8 +21,8 @@ public enum SessionProfile: String, Sendable, Hashable, Codable {
             return 1000
         case .qBittorrentParityV1:
             return 500
-        case .beastV1:
-            return 2000
+        case .transmissionParityV1:
+            return 200
         }
     }
 
@@ -24,16 +30,16 @@ public enum SessionProfile: String, Sendable, Hashable, Codable {
         switch self {
         case .baseline:
             return []
-        case .animekoParityV1, .animekoParityV2, .qBittorrentParityV1, .beastV1:
+        case .animekoParityV1, .animekoParityV2, .qBittorrentParityV1, .transmissionParityV1:
             return Self.commonDHTBootstrapNodes
         }
     }
 
     public var defaultTrackerPreset: [String] {
         switch self {
-        case .baseline, .qBittorrentParityV1:
+        case .baseline, .qBittorrentParityV1, .transmissionParityV1:
             return []
-        case .animekoParityV1, .animekoParityV2, .beastV1:
+        case .animekoParityV1, .animekoParityV2:
             return Self.animekoTrackerPreset
         }
     }
@@ -57,13 +63,37 @@ public enum SessionProfile: String, Sendable, Hashable, Codable {
             updated.activeTrackerLimit = -1
             updated.activeLocalPeerDiscoveryLimit = -1
             updated.activeTorrentLimit = -1
+            updated.announceToAllTrackers = true
+            updated.announceToAllTiers = true
+            updated.peerTurnover = 8
+            updated.peerTurnoverCutoff = 85
+            updated.peerTurnoverInterval = 120
             updated.connectionSpeed = 100
             updated.torrentConnectBoost = 200
+            updated.mixedModeAlgorithm = .preferTCP
+            updated.chokingAlgorithm = .rateBased
+            updated.seedChokingAlgorithm = .fastestUpload
             updated.maxOutgoingRequestQueueSize = 2000
             updated.maxAllowedIncomingRequestQueueSize = 2000
-            updated.aioThreads = 8
-            updated.filePoolSize = 512
-            updated.maxQueuedDiskBytes = 8 * 1024 * 1024
+            updated.wholePiecesThreshold = 20
+            updated.enablePieceExtentAffinity = true
+            updated.suggestMode = .suggestReadCache
+            updated.aioThreads = 12
+            updated.checkingMemoryUsage = 32
+            updated.filePoolSize = 1000
+            updated.maxConcurrentHTTPAnnounces = 100
+            updated.stopTrackerTimeout = 5
+            updated.includeIPOverheadInRateLimit = false
+            updated.allowMultipleConnectionsPerIP = false
+            updated.validateHTTPSTrackers = true
+            updated.enableSSRFMitigation = true
+            updated.enableOutgoingTCP = true
+            updated.enableIncomingTCP = true
+            updated.enableOutgoingUTP = true
+            updated.enableIncomingUTP = true
+            updated.maxQueuedDiskBytes = 16 * 1024 * 1024
+            updated.sendBufferLowWatermarkBytes = 64 * 1024
+            updated.sendBufferWatermarkBytes = 2 * 1024 * 1024
             updated.sendBufferWatermarkFactorPercent = 150
             updated.enableUPnP = true
             updated.enableNATPMP = true
@@ -89,13 +119,15 @@ public enum SessionProfile: String, Sendable, Hashable, Codable {
             updated.chokingAlgorithm = .fixedSlots
             updated.seedChokingAlgorithm = .fastestUpload
             updated.maxOutgoingRequestQueueSize = 500
-            updated.maxAllowedIncomingRequestQueueSize = 200
+            updated.maxAllowedIncomingRequestQueueSize = 2000
+            updated.wholePiecesThreshold = 20
             updated.enablePieceExtentAffinity = false
             updated.suggestMode = .noPieceSuggestions
-            updated.aioThreads = 8
-            updated.filePoolSize = 500
+            updated.aioThreads = 10
+            updated.checkingMemoryUsage = 32
+            updated.filePoolSize = 5000
             updated.maxConcurrentHTTPAnnounces = 50
-            updated.stopTrackerTimeout = 2
+            updated.stopTrackerTimeout = 5
             updated.includeIPOverheadInRateLimit = false
             updated.allowMultipleConnectionsPerIP = false
             updated.validateHTTPSTrackers = true
@@ -104,49 +136,54 @@ public enum SessionProfile: String, Sendable, Hashable, Codable {
             updated.enableIncomingTCP = true
             updated.enableOutgoingUTP = true
             updated.enableIncomingUTP = true
+            updated.sendBufferLowWatermarkBytes = 10 * 1024
+            updated.sendBufferWatermarkBytes = 500 * 1024
+            updated.sendBufferWatermarkFactorPercent = 50
             updated.enableUPnP = true
             updated.enableNATPMP = true
             updated.dhtBootstrapNodes = defaultDHTBootstrapNodes
             updated.trackerPresetURLs = defaultTrackerPreset
-        case .beastV1:
-            updated.connectionsLimit = 2000
-            updated.activeDownloadsLimit = -1
+        case .transmissionParityV1:
+            updated.connectionsLimit = 200
+            updated.activeDownloadsLimit = 5
             updated.activeSeedsLimit = -1
-            updated.activeCheckingLimit = -1
+            updated.activeCheckingLimit = 1
             updated.activeDistributedHashTableLimit = -1
             updated.activeTrackerLimit = -1
             updated.activeLocalPeerDiscoveryLimit = -1
             updated.activeTorrentLimit = -1
-            updated.announceToAllTrackers = true
+            updated.announceToAllTrackers = false
             updated.announceToAllTiers = true
-            updated.peerTurnover = 8
-            updated.peerTurnoverCutoff = 85
-            updated.peerTurnoverInterval = 120
-            updated.connectionSpeed = 120
-            updated.torrentConnectBoost = 300
+            updated.peerTurnover = 4
+            updated.peerTurnoverCutoff = 90
+            updated.peerTurnoverInterval = 300
+            updated.connectionSpeed = 30
+            updated.torrentConnectBoost = 30
             updated.mixedModeAlgorithm = .peerProportional
-            updated.chokingAlgorithm = .rateBased
+            updated.chokingAlgorithm = .fixedSlots
             updated.seedChokingAlgorithm = .fastestUpload
-            updated.maxOutgoingRequestQueueSize = 4000
-            updated.maxAllowedIncomingRequestQueueSize = 4000
-            updated.wholePiecesThreshold = 40
-            updated.enablePieceExtentAffinity = true
-            updated.suggestMode = .suggestReadCache
-            updated.aioThreads = 16
-            updated.filePoolSize = 2048
-            updated.maxConcurrentHTTPAnnounces = 100
-            updated.stopTrackerTimeout = 1
-            updated.allowMultipleConnectionsPerIP = true
+            updated.maxOutgoingRequestQueueSize = 500
+            updated.maxAllowedIncomingRequestQueueSize = 2000
+            updated.wholePiecesThreshold = 20
+            updated.enablePieceExtentAffinity = false
+            updated.suggestMode = .noPieceSuggestions
+            updated.aioThreads = 8
+            updated.checkingMemoryUsage = 32
+            updated.filePoolSize = 500
+            updated.maxConcurrentHTTPAnnounces = 50
+            updated.stopTrackerTimeout = 5
+            updated.includeIPOverheadInRateLimit = false
+            updated.allowMultipleConnectionsPerIP = false
             updated.validateHTTPSTrackers = true
             updated.enableSSRFMitigation = true
             updated.enableOutgoingTCP = true
             updated.enableIncomingTCP = true
             updated.enableOutgoingUTP = true
             updated.enableIncomingUTP = true
-            updated.maxQueuedDiskBytes = 64 * 1024 * 1024
-            updated.sendBufferLowWatermarkBytes = 128 * 1024
-            updated.sendBufferWatermarkBytes = 4 * 1024 * 1024
-            updated.sendBufferWatermarkFactorPercent = 200
+            updated.maxQueuedDiskBytes = 8 * 1024 * 1024
+            updated.sendBufferLowWatermarkBytes = 10 * 1024
+            updated.sendBufferWatermarkBytes = 500 * 1024
+            updated.sendBufferWatermarkFactorPercent = 50
             updated.enableUPnP = true
             updated.enableNATPMP = true
             updated.dhtBootstrapNodes = defaultDHTBootstrapNodes

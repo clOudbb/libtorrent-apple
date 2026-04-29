@@ -8,7 +8,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 ## What This Repo Gives You
 
 - A public SwiftPM product: `LibtorrentApple`
-- An internal binary target: `LibtorrentAppleBinary`
+- A stable bridge target over a versioned internal binary target, currently `LibtorrentAppleBinary_0_2_9`
 - Apple builds for `iOS device`, `iOS simulator`, and `macOS`
 - A release pipeline that produces a GitHub Release-hosted `XCFramework` zip for SwiftPM
 - A Swift API that already covers the core BitTorrent engine workflows used by projects like `iTorrent` and `anitorrent`
@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.8-alpha.1")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.9")
 ```
 
 Then import:
@@ -138,9 +138,11 @@ Available profiles:
 
 - `.baseline`: keep default behavior
 - `.animekoParityV1`: legacy animeko parity profile
-- `.animekoParityV2`: upgraded animeko/anitorrent parity profile
-- `.qBittorrentParityV1`: qBittorrent-style throughput profile
-- `.beastV1`: aggressive extreme-throughput profile (higher CPU/network/battery cost)
+- `.animekoParityV2`: upgraded animeko/anitorrent throughput profile with anime tracker preset, faster peer churn, larger request queues, and higher I/O buffers
+- `.qBittorrentParityV1`: qBittorrent-style throughput profile, including qB/libtorrent request queue, AIO, file-pool, send-buffer, tracker announce, and TCP preference defaults
+- `.transmissionParityV1`: Transmission-style balanced profile with lower global peer pressure, queue limits, request queue parity, and uTP/TCP fairness
+
+Profiles are convenience presets over the public `SessionConfiguration` API. Downstream apps can apply a reference profile, override any exposed field, or build a fully custom configuration directly. Use `SessionProfile.throughputReferenceProfiles` to enumerate the three formal throughput references.
 
 ### 6. Deferred Apply and Recovery Reannounce Hooks
 
@@ -286,8 +288,15 @@ This version already includes:
 
 The public SwiftPM package is `remote-binary-only`.
 
+Current public package metadata:
+
+- Repository: `https://github.com/clOudbb/libtorrent-apple.git`
+- Latest published package version: `0.2.9`
+- Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.9/LibtorrentAppleBinary-0.2.9.zip`
+- Current binary module identity: `LibtorrentAppleBinary_0_2_9`
+
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
-- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_8_alpha_3`.
+- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_9`.
 - `PackageSupport/BinaryArtifact.env` is retained only as internal maintainer metadata; downstream SwiftPM consumers do not read it.
 
 Maintainer-only validation paths:
@@ -318,16 +327,16 @@ Validate tag switching in one shared cache directory:
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.8-alpha.2 \
-  --version-b 0.2.8-alpha.3
+  --version-a 0.2.8 \
+  --version-b 0.2.9
 ```
 
 Run a full local self-verification using the current working tree plus a synthetic next release:
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.8-alpha.3 \
-  --version-b 0.2.8-alpha.4
+  --version-a 0.2.9 \
+  --version-b 0.2.10-alpha.1
 ```
 
 Local self-verification rewrites the temporary validation tags to use `binaryTarget(path:)`.
@@ -340,10 +349,10 @@ Build the Apple frameworks:
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.8-alpha.1
+./scripts/make-xcframework.sh 0.2.9
 ```
 
-Run the local benchmark demo (v0.2.8-alpha.1 P0-0):
+Run the local benchmark demo:
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
@@ -418,14 +427,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.8-alpha.1
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.8-alpha.1
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.10-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.10-alpha.1
 ```
 
 Override both dependencies in one release build:
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.8-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.10-alpha.1
 ```
 
 ## Release Model
@@ -441,7 +450,7 @@ What SwiftPM actually needs:
 The zip already contains the full versioned `.xcframework`.
 You do not upload standalone `.framework` directories for SwiftPM consumption.
 
-From `v0.2.8-alpha.3` onward:
+For current and future release tags:
 
 - every release gets a unique internal binary module/framework name
 - `Package.swift` is self-contained for downstream consumers

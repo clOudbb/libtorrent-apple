@@ -131,11 +131,38 @@ public struct TorrentDownloadController: Sendable {
         try await prioritizePieces(pieceWindow, priority: .top)
         try await setDeadlines(for: pieceWindow, milliseconds: deadlineMilliseconds)
 
-        return try await snapshot()
+        return try await snapshotEnsuringTopPriority(for: pieceWindow)
     }
 
     private func normalizedIndices(_ indices: [Int]) -> [Int] {
         Array(Set(indices.filter { $0 >= 0 })).sorted()
+    }
+
+    private func snapshotEnsuringTopPriority(
+        for pieceIndices: [Int],
+        maxAttempts: Int = 5
+    ) async throws -> TorrentPieceSnapshot {
+        let expectedPieces = Set(normalizedIndices(pieceIndices))
+        guard !expectedPieces.isEmpty else {
+            return try await snapshot()
+        }
+
+        for attempt in 0 ..< maxAttempts {
+            let current = try await snapshot()
+            let selectedPieces = current.pieces.filter { expectedPieces.contains($0.index) }
+            if selectedPieces.count == expectedPieces.count,
+               selectedPieces.allSatisfy({ $0.priority == .top })
+            {
+                return current
+            }
+
+            try await prioritizePieces(Array(expectedPieces), priority: .top)
+            if attempt + 1 < maxAttempts {
+                try await AsyncTiming.sleep(seconds: 0.05)
+            }
+        }
+
+        return try await snapshot()
     }
 
     private func streamingWindow(

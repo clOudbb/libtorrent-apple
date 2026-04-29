@@ -8,7 +8,7 @@
 ## 这个仓库能给你什么
 
 - 一个对外的 SwiftPM 产品：`LibtorrentApple`
-- 一个内部二进制 target：`LibtorrentAppleBinary`
+- 一个稳定桥接 target，底层使用版本化内部二进制 target，当前为 `LibtorrentAppleBinary_0_2_9`
 - `iOS 真机`、`iOS 模拟器`、`macOS` 三套产物
 - 一套可以产出 GitHub Release 二进制包的自动化脚本
 - 一套已经覆盖 `iTorrent`、`anitorrent` 这类项目 BT 核心能力的 Swift API
@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.8-alpha.1")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.9")
 ```
 
 导入模块：
@@ -118,23 +118,33 @@ Task {
 }
 ```
 
-### 5. 应用 animeko 对齐策略与 peer 过滤
+### 5. 应用吞吐策略与 peer 过滤
 
 ```swift
 var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
 configuration.shareRatioLimit = 200
-configuration.applyProfile(.animekoParityV1)
+configuration.applyProfile(.qBittorrentParityV1)
 
 let parityDownloader = TorrentDownloader(configuration: configuration)
 try await parityDownloader.start()
-try await parityDownloader.applyProfile(.animekoParityV1)
+try await parityDownloader.applyProfile(.qBittorrentParityV1)
 try await parityDownloader.setPeerFilters(
     blockedCIDRs: ["10.0.0.0/8"],
     allowedCIDRs: []
 )
 ```
 
-### 5. 文件优先级、tracker 和 torrent 控制
+可选策略：
+
+- `.baseline`：保持默认行为
+- `.animekoParityV1`：旧版 animeko 对齐策略
+- `.animekoParityV2`：优化版 animeko/anitorrent 吞吐策略，包含 anime tracker preset、更快 peer churn、更大请求队列和更高 I/O buffer
+- `.qBittorrentParityV1`：qB 风格吞吐策略，显式对齐 request queue、AIO、file pool、send buffer、tracker announce 和偏 TCP 的混合传输默认值
+- `.transmissionParityV1`：Transmission 风格均衡策略，降低全局 peer 压力，保留下载队列、request queue 对齐和 uTP/TCP 公平性
+
+这些策略只是基于公开 `SessionConfiguration` API 的便捷 preset。下游可以先应用参考策略再覆盖任意已暴露字段，也可以完全跳过 preset 直接构建自定义配置。`SessionProfile.throughputReferenceProfiles` 可用于枚举三套正式吞吐参考策略。
+
+### 6. 文件优先级、tracker 和 torrent 控制
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -153,7 +163,7 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 6. 保存和恢复
+### 7. 保存和恢复
 
 适用于 iOS / macOS 重启后的持久化恢复：
 
@@ -222,8 +232,15 @@ _ = try await downloader.handleSystemWakeupDetected()
 
 对下游 App 来说，公开 SwiftPM 包现在只保留 `remote-binary` 一条消费路径。
 
+当前公开包信息：
+
+- 仓库：`https://github.com/clOudbb/libtorrent-apple.git`
+- 最新公开包版本：`0.2.9`
+- 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.9/LibtorrentAppleBinary-0.2.9.zip`
+- 当前 binary module 身份：`LibtorrentAppleBinary_0_2_9`
+
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
-- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_8_alpha_3`。
+- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_9`。
 - `PackageSupport/BinaryArtifact.env` 只保留给维护者脚本使用，不再参与下游 SwiftPM 解析。
 
 仅供维护者使用的验证路径：
@@ -244,7 +261,7 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.8-alpha.1
+./scripts/make-xcframework.sh 0.2.9
 ```
 
 验证 local-binary dev package：
@@ -264,29 +281,29 @@ _ = try await downloader.handleSystemWakeupDetected()
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.8-alpha.2 \
-  --version-b 0.2.8-alpha.3
+  --version-a 0.2.8 \
+  --version-b 0.2.9
 ```
 
 用当前工作区做一次完整的本地自验：
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.8-alpha.3 \
-  --version-b 0.2.8-alpha.4
+  --version-a 0.2.9 \
+  --version-b 0.2.10-alpha.1
 ```
 
 本地自验会把临时验证 tag 改写成 `binaryTarget(path:)`。
 原因是 SwiftPM 对 URL 形式的 binary target 只接受 `https`，所以本地回归仍然验证同一套版本化 XCFramework 身份，只是不再伪造 HTTP 下载地址。
 
-运行本地 benchmark demo（v0.2.8-alpha.1 P0-0）：
+运行本地 benchmark demo：
 
 ```bash
 cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # 编辑 /tmp/benchmark-sources.txt，替换成你的磁力链接/.torrent 输入
 
 ./scripts/run-benchmark-demo.sh local-binary \
-  --profile animeko-parity \
+  --profile animeko-parity-v2 \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
   --interval 1
@@ -318,14 +335,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.8-alpha.1
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.8-alpha.1
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.10-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.10-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.8-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.10-alpha.1
 ```
 
 ## Release 与 SwiftPM 的关系
@@ -341,7 +358,7 @@ SwiftPM 真正依赖的是 GitHub Release 上的二进制 zip。
 这个 zip 里已经包含完整的版本化 `.xcframework`。  
 所以给 SwiftPM 发版时，不需要单独上传 `.framework` 目录。
 
-从 `v0.2.8-alpha.3` 开始：
+对当前和后续 release tag：
 
 - 每个 release 都拥有独立的内部 binary module/framework 名
 - 根 `Package.swift` 对下游消费完全自包含

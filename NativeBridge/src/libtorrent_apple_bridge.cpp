@@ -531,11 +531,16 @@ bool set_int_setting(
     int key,
     int32_t value,
     bool runtime_mode,
-    bool allow_negative_one
+    bool allow_negative_one,
+    bool should_apply
 )
 {
     if (settings == nullptr) {
         return false;
+    }
+
+    if (!should_apply) {
+        return true;
     }
 
     if (runtime_mode) {
@@ -626,6 +631,7 @@ bool set_optional_enum_int_setting(
 
 bool apply_configuration_to_settings(
     libtorrent_apple_session_configuration_t const &configuration,
+    libtorrent_apple_session_configuration_t const *current_configuration,
     lt::settings_pack *settings_out,
     bool runtime_mode,
     libtorrent_apple_error_t *error_out
@@ -636,6 +642,13 @@ bool apply_configuration_to_settings(
     }
 
     lt::settings_pack &settings = *settings_out;
+    auto const int_changed = [runtime_mode, current_configuration](auto field, int32_t requested) -> bool {
+        if (!runtime_mode || current_configuration == nullptr) {
+            return true;
+        }
+
+        return (*current_configuration).*field != requested;
+    };
 
     if (!runtime_mode) {
         std::string const user_agent = config_string(configuration.user_agent);
@@ -671,14 +684,16 @@ bool apply_configuration_to_settings(
         lt::settings_pack::upload_rate_limit,
         configuration.upload_rate_limit,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::upload_rate_limit, configuration.upload_rate_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::download_rate_limit,
         configuration.download_rate_limit,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::download_rate_limit, configuration.download_rate_limit)
     );
     if (configuration.share_ratio_limit >= 0) {
         settings.set_int(lt::settings_pack::share_ratio_limit, configuration.share_ratio_limit);
@@ -688,56 +703,64 @@ bool apply_configuration_to_settings(
         lt::settings_pack::connections_limit,
         configuration.connections_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::connections_limit, configuration.connections_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_downloads,
         configuration.active_downloads_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_downloads_limit, configuration.active_downloads_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_seeds,
         configuration.active_seeds_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_seeds_limit, configuration.active_seeds_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_checking,
         configuration.active_checking_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_checking_limit, configuration.active_checking_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_dht_limit,
         configuration.active_dht_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_dht_limit, configuration.active_dht_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_tracker_limit,
         configuration.active_tracker_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_tracker_limit, configuration.active_tracker_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_lsd_limit,
         configuration.active_lsd_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_lsd_limit, configuration.active_lsd_limit)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::active_limit,
         configuration.active_limit,
         runtime_mode,
-        true
+        true,
+        int_changed(&libtorrent_apple_session_configuration_t::active_limit, configuration.active_limit)
     );
     if (!set_optional_bool_setting(
             &settings,
@@ -784,14 +807,16 @@ bool apply_configuration_to_settings(
         lt::settings_pack::connection_speed,
         configuration.connection_speed,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::connection_speed, configuration.connection_speed)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::torrent_connect_boost,
         configuration.torrent_connect_boost,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::torrent_connect_boost, configuration.torrent_connect_boost)
     );
     if (!set_optional_enum_int_setting(
             &settings,
@@ -860,21 +885,27 @@ bool apply_configuration_to_settings(
         lt::settings_pack::max_out_request_queue,
         configuration.max_out_request_queue,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::max_out_request_queue, configuration.max_out_request_queue)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::max_allowed_in_request_queue,
         configuration.max_allowed_in_request_queue,
         runtime_mode,
-        false
+        false,
+        int_changed(
+            &libtorrent_apple_session_configuration_t::max_allowed_in_request_queue,
+            configuration.max_allowed_in_request_queue
+        )
     );
     set_int_setting(
         &settings,
         lt::settings_pack::whole_pieces_threshold,
         configuration.whole_pieces_threshold,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::whole_pieces_threshold, configuration.whole_pieces_threshold)
     );
     if (!set_optional_bool_setting(
             &settings,
@@ -909,21 +940,24 @@ bool apply_configuration_to_settings(
         lt::settings_pack::aio_threads,
         configuration.aio_threads,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::aio_threads, configuration.aio_threads)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::checking_mem_usage,
         configuration.checking_mem_usage,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::checking_mem_usage, configuration.checking_mem_usage)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::file_pool_size,
         configuration.file_pool_size,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::file_pool_size, configuration.file_pool_size)
     );
     if (!set_optional_non_negative_int_setting(
             &settings,
@@ -1010,28 +1044,35 @@ bool apply_configuration_to_settings(
         lt::settings_pack::max_queued_disk_bytes,
         configuration.max_queued_disk_bytes,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::max_queued_disk_bytes, configuration.max_queued_disk_bytes)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_low_watermark,
         configuration.send_buffer_low_watermark,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::send_buffer_low_watermark, configuration.send_buffer_low_watermark)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_watermark,
         configuration.send_buffer_watermark,
         runtime_mode,
-        false
+        false,
+        int_changed(&libtorrent_apple_session_configuration_t::send_buffer_watermark, configuration.send_buffer_watermark)
     );
     set_int_setting(
         &settings,
         lt::settings_pack::send_buffer_watermark_factor,
         configuration.send_buffer_watermark_factor,
         runtime_mode,
-        false
+        false,
+        int_changed(
+            &libtorrent_apple_session_configuration_t::send_buffer_watermark_factor,
+            configuration.send_buffer_watermark_factor
+        )
     );
 
     if (!runtime_mode) {
@@ -1523,7 +1564,7 @@ bool libtorrent_apple_session_create(
 
     try {
         lt::settings_pack settings;
-        if (!apply_configuration_to_settings(effective_configuration, &settings, false, error_out)) {
+        if (!apply_configuration_to_settings(effective_configuration, nullptr, &settings, false, error_out)) {
             return false;
         }
 
@@ -1602,7 +1643,14 @@ bool libtorrent_apple_session_apply_configuration(
 
     try {
         lt::settings_pack settings;
-        if (!apply_configuration_to_settings(*configuration, &settings, true, error_out)) {
+        if (!apply_configuration_to_settings(
+                *configuration,
+                &session->configuration,
+                &settings,
+                true,
+                error_out
+            ))
+        {
             return false;
         }
 

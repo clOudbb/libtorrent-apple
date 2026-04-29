@@ -12,7 +12,7 @@ private enum BenchmarkProfile: String, CaseIterable, Codable {
     case animekoParityV1 = "animeko-parity-v1"
     case animekoParityV2 = "animeko-parity-v2"
     case qBittorrentParityV1 = "qbittorrent-parity-v1"
-    case beastV1 = "beast-v1"
+    case transmissionParityV1 = "transmission-parity-v1"
 
     var sessionProfile: SessionProfile {
         switch self {
@@ -24,8 +24,8 @@ private enum BenchmarkProfile: String, CaseIterable, Codable {
             return .animekoParityV1
         case .qBittorrentParityV1:
             return .qBittorrentParityV1
-        case .beastV1:
-            return .beastV1
+        case .transmissionParityV1:
+            return .transmissionParityV1
         }
     }
 
@@ -106,9 +106,11 @@ private struct ConfigurationSnapshot: Codable {
     let seedChokingAlgorithm: String?
     let maxOutgoingRequestQueueSize: Int
     let maxAllowedIncomingRequestQueueSize: Int
+    let wholePiecesThreshold: Int
     let enablePieceExtentAffinity: Bool?
     let suggestMode: String?
     let aioThreads: Int
+    let checkingMemoryUsage: Int
     let filePoolSize: Int
     let maxConcurrentHTTPAnnounces: Int?
     let stopTrackerTimeout: Int?
@@ -120,6 +122,10 @@ private struct ConfigurationSnapshot: Codable {
     let enableIncomingTCP: Bool?
     let enableOutgoingUTP: Bool?
     let enableIncomingUTP: Bool?
+    let maxQueuedDiskBytes: Int
+    let sendBufferLowWatermarkBytes: Int
+    let sendBufferWatermarkBytes: Int
+    let sendBufferWatermarkFactorPercent: Int
     let dhtBootstrapNodes: [String]
     let trackerPresetCount: Int
 }
@@ -192,7 +198,7 @@ private struct CLIOptions {
           --sources-file <path>      Load sources from file. Repeatable.
 
         Optional:
-          --profile <name>           baseline | animeko-parity | animeko-parity-v1 | animeko-parity-v2 | qbittorrent-parity-v1 | beast-v1 (default: baseline)
+          --profile <name>           baseline | animeko-parity | animeko-parity-v1 | animeko-parity-v2 | qbittorrent-parity-v1 | transmission-parity-v1 (default: baseline)
           --duration <seconds>       Sampling window in seconds (default: 300)
           --interval <seconds>       Sampling interval in seconds (default: 1)
           --output-dir <path>        Output directory for CSV/JSON logs
@@ -419,10 +425,12 @@ private enum LibtorrentAppleBenchmarkCLI {
             print("Benchmark completed.")
             print("Output directory: \(resultDirectory.path)")
         } catch let error as CLIError {
-            fputs("\(error.message)\n", stderr)
-            if error.message != CLIOptions.usage {
-                fputs("\n\(CLIOptions.usage)\n", stderr)
+            if error.message == CLIOptions.usage {
+                print(error.message)
+                exit(0)
             }
+            fputs("\(error.message)\n", stderr)
+            fputs("\n\(CLIOptions.usage)\n", stderr)
             exit(2)
         } catch {
             fputs("Benchmark failed: \(error.localizedDescription)\n", stderr)
@@ -484,9 +492,11 @@ private enum LibtorrentAppleBenchmarkCLI {
             seedChokingAlgorithm: configuration.seedChokingAlgorithm.map { String(describing: $0) },
             maxOutgoingRequestQueueSize: configuration.maxOutgoingRequestQueueSize,
             maxAllowedIncomingRequestQueueSize: configuration.maxAllowedIncomingRequestQueueSize,
+            wholePiecesThreshold: configuration.wholePiecesThreshold,
             enablePieceExtentAffinity: configuration.enablePieceExtentAffinity,
             suggestMode: configuration.suggestMode.map { String(describing: $0) },
             aioThreads: configuration.aioThreads,
+            checkingMemoryUsage: configuration.checkingMemoryUsage,
             filePoolSize: configuration.filePoolSize,
             maxConcurrentHTTPAnnounces: configuration.maxConcurrentHTTPAnnounces,
             stopTrackerTimeout: configuration.stopTrackerTimeout,
@@ -498,6 +508,10 @@ private enum LibtorrentAppleBenchmarkCLI {
             enableIncomingTCP: configuration.enableIncomingTCP,
             enableOutgoingUTP: configuration.enableOutgoingUTP,
             enableIncomingUTP: configuration.enableIncomingUTP,
+            maxQueuedDiskBytes: configuration.maxQueuedDiskBytes,
+            sendBufferLowWatermarkBytes: configuration.sendBufferLowWatermarkBytes,
+            sendBufferWatermarkBytes: configuration.sendBufferWatermarkBytes,
+            sendBufferWatermarkFactorPercent: configuration.sendBufferWatermarkFactorPercent,
             dhtBootstrapNodes: configuration.dhtBootstrapNodes,
             trackerPresetCount: injectedTrackers.count
         )
