@@ -298,21 +298,21 @@ build_release_changelog() {
     fi
 
     local zh_body="" en_body=""
-    append_section zh_body "✨ What’s New" "${zh_summary}"
-    append_section zh_body "🌟 Highlights" "${zh_highlights}"
-    append_section zh_body "🎉 New" "${zh_new}"
-    append_section zh_body "🚀 Improved" "${zh_improved}"
-    append_section zh_body "🛠 Fixed" "${zh_fixed}"
-    append_section zh_body "⚠️ Breaking / Migration" "${zh_breaking}"
-    append_section zh_body "ℹ️ Notes" "${zh_notes}"
+    append_section zh_body "What's New" "${zh_summary}"
+    append_section zh_body "Highlights" "${zh_highlights}"
+    append_section zh_body "New" "${zh_new}"
+    append_section zh_body "Improved" "${zh_improved}"
+    append_section zh_body "Fixed" "${zh_fixed}"
+    append_section zh_body "Breaking / Migration" "${zh_breaking}"
+    append_section zh_body "Notes" "${zh_notes}"
 
-    append_section en_body "✨ What’s New" "${en_summary}"
-    append_section en_body "🌟 Highlights" "${en_highlights}"
-    append_section en_body "🎉 New" "${en_new}"
-    append_section en_body "🚀 Improved" "${en_improved}"
-    append_section en_body "🛠 Fixed" "${en_fixed}"
-    append_section en_body "⚠️ Breaking / Migration" "${en_breaking}"
-    append_section en_body "ℹ️ Notes" "${en_notes}"
+    append_section en_body "What's New" "${en_summary}"
+    append_section en_body "Highlights" "${en_highlights}"
+    append_section en_body "New" "${en_new}"
+    append_section en_body "Improved" "${en_improved}"
+    append_section en_body "Fixed" "${en_fixed}"
+    append_section en_body "Breaking / Migration" "${en_breaking}"
+    append_section en_body "Notes" "${en_notes}"
 
     GENERATED_ZH_CHANGELOG="${zh_body}"
     GENERATED_EN_CHANGELOG="${en_body}"
@@ -355,17 +355,15 @@ cat > "${BINARY_TARGET_SNIPPET_PATH}" <<EOF
 EOF
 
 cat > "${RELEASE_NOTES_PATH}" <<EOF
-# 🚀 ${RELEASE_TAG}
+## English
+
+${GENERATED_EN_CHANGELOG}
+
+---
 
 ## 中文
 
 ${GENERATED_ZH_CHANGELOG}
-
----
-
-## English
-
-${GENERATED_EN_CHANGELOG}
 
 ## Artifact
 
