@@ -99,17 +99,20 @@ if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
         "${RELEASE_TAG}" \
         "${ZIP_PATH}"
 else
-    release_create_args=()
     if [[ "${IS_PRERELEASE}" == "1" ]]; then
-        release_create_args+=(--prerelease)
+        gh release create \
+            "${RELEASE_TAG}" \
+            "${ZIP_PATH}" \
+            --prerelease \
+            --title "${RELEASE_TAG}" \
+            --notes-file "${RELEASE_NOTES_PATH}"
+    else
+        gh release create \
+            "${RELEASE_TAG}" \
+            "${ZIP_PATH}" \
+            --title "${RELEASE_TAG}" \
+            --notes-file "${RELEASE_NOTES_PATH}"
     fi
-
-    gh release create \
-        "${RELEASE_TAG}" \
-        "${ZIP_PATH}" \
-        "${release_create_args[@]}" \
-        --title "${RELEASE_TAG}" \
-        --notes-file "${RELEASE_NOTES_PATH}"
 fi
 
 echo "Published ${RELEASE_TAG}"
