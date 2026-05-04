@@ -1505,6 +1505,11 @@ bool libtorrent_apple_bridge_supports_https_trackers(void)
 #endif
 }
 
+bool libtorrent_apple_bridge_supports_session_runtime_settings(void)
+{
+    return true;
+}
+
 int32_t libtorrent_apple_required_alert_mask(void)
 {
     return default_alert_mask();
@@ -1692,6 +1697,165 @@ bool libtorrent_apple_session_apply_configuration(
     } catch (std::exception const &exception) {
         return fail(error_out, -2, exception.what());
     }
+}
+
+bool libtorrent_apple_session_apply_runtime_settings(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_session_runtime_settings_t const *settings,
+    libtorrent_apple_error_t *error_out
+)
+{
+    clear_error(error_out);
+
+    if (session == nullptr || session->handle == nullptr) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (settings == nullptr) {
+        return fail(error_out, -1, "settings must not be null");
+    }
+
+    try {
+        lt::settings_pack pack;
+
+        auto const apply_non_negative_int = [&pack](bool has_value, int key, int32_t value) {
+            if (has_value) {
+                pack.set_int(key, std::max(value, static_cast<int32_t>(0)));
+            }
+        };
+        auto const apply_limit_int = [&pack](bool has_value, int key, int32_t value) {
+            if (has_value) {
+                pack.set_int(key, std::max(value, static_cast<int32_t>(-1)));
+            }
+        };
+
+        apply_non_negative_int(settings->has_upload_rate_limit, lt::settings_pack::upload_rate_limit, settings->upload_rate_limit);
+        apply_non_negative_int(settings->has_download_rate_limit, lt::settings_pack::download_rate_limit, settings->download_rate_limit);
+        apply_limit_int(settings->has_connections_limit, lt::settings_pack::connections_limit, settings->connections_limit);
+        apply_limit_int(settings->has_active_downloads_limit, lt::settings_pack::active_downloads, settings->active_downloads_limit);
+        apply_limit_int(settings->has_active_seeds_limit, lt::settings_pack::active_seeds, settings->active_seeds_limit);
+        apply_limit_int(settings->has_active_checking_limit, lt::settings_pack::active_checking, settings->active_checking_limit);
+        apply_limit_int(settings->has_active_dht_limit, lt::settings_pack::active_dht_limit, settings->active_dht_limit);
+        apply_limit_int(settings->has_active_tracker_limit, lt::settings_pack::active_tracker_limit, settings->active_tracker_limit);
+        apply_limit_int(settings->has_active_lsd_limit, lt::settings_pack::active_lsd_limit, settings->active_lsd_limit);
+        apply_limit_int(settings->has_active_limit, lt::settings_pack::active_limit, settings->active_limit);
+        apply_non_negative_int(settings->has_connection_speed, lt::settings_pack::connection_speed, settings->connection_speed);
+        apply_non_negative_int(settings->has_torrent_connect_boost, lt::settings_pack::torrent_connect_boost, settings->torrent_connect_boost);
+        if (settings->has_mixed_mode_algorithm) {
+            switch (settings->mixed_mode_algorithm) {
+            case 0:
+                pack.set_int(lt::settings_pack::mixed_mode_algorithm, lt::settings_pack::prefer_tcp);
+                break;
+            case 1:
+                pack.set_int(lt::settings_pack::mixed_mode_algorithm, lt::settings_pack::peer_proportional);
+                break;
+            default:
+                return fail(error_out, -1, "invalid value for mixed_mode_algorithm");
+            }
+        }
+
+        if (settings->has_rate_limit_ip_overhead) {
+            pack.set_bool(lt::settings_pack::rate_limit_ip_overhead, settings->rate_limit_ip_overhead);
+        }
+        if (settings->has_allow_multiple_connections_per_ip) {
+            pack.set_bool(
+                lt::settings_pack::allow_multiple_connections_per_ip,
+                settings->allow_multiple_connections_per_ip
+            );
+        }
+        if (settings->has_enable_outgoing_tcp) {
+            pack.set_bool(lt::settings_pack::enable_outgoing_tcp, settings->enable_outgoing_tcp);
+        }
+        if (settings->has_enable_incoming_tcp) {
+            pack.set_bool(lt::settings_pack::enable_incoming_tcp, settings->enable_incoming_tcp);
+        }
+        if (settings->has_enable_outgoing_utp) {
+            pack.set_bool(lt::settings_pack::enable_outgoing_utp, settings->enable_outgoing_utp);
+        }
+        if (settings->has_enable_incoming_utp) {
+            pack.set_bool(lt::settings_pack::enable_incoming_utp, settings->enable_incoming_utp);
+        }
+        if (settings->has_auto_sequential) {
+            pack.set_bool(lt::settings_pack::auto_sequential, settings->auto_sequential);
+        }
+
+        session->handle->apply_settings(pack);
+
+        if (settings->has_upload_rate_limit) {
+            session->configuration.upload_rate_limit = std::max(settings->upload_rate_limit, static_cast<int32_t>(0));
+        }
+        if (settings->has_download_rate_limit) {
+            session->configuration.download_rate_limit = std::max(settings->download_rate_limit, static_cast<int32_t>(0));
+        }
+        if (settings->has_connections_limit) {
+            session->configuration.connections_limit = std::max(settings->connections_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_downloads_limit) {
+            session->configuration.active_downloads_limit = std::max(settings->active_downloads_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_seeds_limit) {
+            session->configuration.active_seeds_limit = std::max(settings->active_seeds_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_checking_limit) {
+            session->configuration.active_checking_limit = std::max(settings->active_checking_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_dht_limit) {
+            session->configuration.active_dht_limit = std::max(settings->active_dht_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_tracker_limit) {
+            session->configuration.active_tracker_limit = std::max(settings->active_tracker_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_lsd_limit) {
+            session->configuration.active_lsd_limit = std::max(settings->active_lsd_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_active_limit) {
+            session->configuration.active_limit = std::max(settings->active_limit, static_cast<int32_t>(-1));
+        }
+        if (settings->has_connection_speed) {
+            session->configuration.connection_speed = std::max(settings->connection_speed, static_cast<int32_t>(0));
+        }
+        if (settings->has_torrent_connect_boost) {
+            session->configuration.torrent_connect_boost = std::max(settings->torrent_connect_boost, static_cast<int32_t>(0));
+        }
+        if (settings->has_mixed_mode_algorithm) {
+            session->configuration.mixed_mode_algorithm = settings->mixed_mode_algorithm;
+        }
+        if (settings->has_rate_limit_ip_overhead) {
+            session->configuration.rate_limit_ip_overhead = settings->rate_limit_ip_overhead ? 1 : 0;
+        }
+        if (settings->has_allow_multiple_connections_per_ip) {
+            session->configuration.allow_multiple_connections_per_ip =
+                settings->allow_multiple_connections_per_ip ? 1 : 0;
+        }
+        if (settings->has_enable_outgoing_tcp) {
+            session->configuration.enable_outgoing_tcp = settings->enable_outgoing_tcp ? 1 : 0;
+        }
+        if (settings->has_enable_incoming_tcp) {
+            session->configuration.enable_incoming_tcp = settings->enable_incoming_tcp ? 1 : 0;
+        }
+        if (settings->has_enable_outgoing_utp) {
+            session->configuration.enable_outgoing_utp = settings->enable_outgoing_utp ? 1 : 0;
+        }
+        if (settings->has_enable_incoming_utp) {
+            session->configuration.enable_incoming_utp = settings->enable_incoming_utp ? 1 : 0;
+        }
+        if (settings->has_auto_sequential) {
+            session->configuration.auto_sequential = settings->auto_sequential;
+        }
+
+        return true;
+    } catch (std::exception const &exception) {
+        return fail(error_out, -2, exception.what());
+    }
+}
+
+bool libtorrent_apple_bridge_session_apply_runtime_settings(
+    libtorrent_apple_session_t *session,
+    libtorrent_apple_bridge_session_runtime_settings_t const *settings,
+    libtorrent_apple_error_t *error_out
+)
+{
+    return libtorrent_apple_session_apply_runtime_settings(session, settings, error_out);
 }
 
 bool libtorrent_apple_session_reopen_network_sockets(

@@ -8,7 +8,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 ## What This Repo Gives You
 
 - A public SwiftPM product: `LibtorrentApple`
-- A stable bridge target over a versioned internal binary target, currently `LibtorrentAppleBinary_0_2_9`
+- A stable bridge target over a versioned internal binary target, currently `LibtorrentAppleBinary_0_2_10`
 - Apple builds for `iOS device`, `iOS simulator`, and `macOS`
 - A release pipeline that produces a GitHub Release-hosted `XCFramework` zip for SwiftPM
 - A Swift API that already covers the core BitTorrent engine workflows used by projects like `iTorrent` and `anitorrent`
@@ -18,7 +18,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.9")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.10")
 ```
 
 Then import:
@@ -142,9 +142,44 @@ Available profiles:
 - `.qBittorrentParityV1`: qBittorrent-style throughput profile, including qB/libtorrent request queue, AIO, file-pool, send-buffer, tracker announce, and TCP preference defaults
 - `.transmissionParityV1`: Transmission-style balanced profile with lower global peer pressure, queue limits, request queue parity, and uTP/TCP fairness
 
-Profiles are convenience presets over the public `SessionConfiguration` API. Downstream apps can apply a reference profile, override any exposed field, or build a fully custom configuration directly. Use `SessionProfile.throughputReferenceProfiles` to enumerate the three formal throughput references.
+Profiles are convenience presets over the public `SessionConfiguration` API. Downstream apps can apply a reference profile, override any exposed field, or build a fully custom configuration directly. Use `SessionProfile.throughputReferenceProfiles` to enumerate the three formal throughput references. Apply profiles before starting a session whenever possible; high-frequency runtime controls should use the narrow setters below.
 
-### 6. Deferred Apply and Recovery Reannounce Hooks
+### 6. Runtime Speed and BitTorrent Settings
+
+Speed and core BitTorrent controls are exposed as sparse runtime patches so downstream apps do not have to resubmit a full `SessionConfiguration` for slider-style updates.
+
+```swift
+guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+    // Use a v0.2.10+ binary artifact, or fall back to low-frequency applyConfiguration.
+    return
+}
+
+// Immediate qBittorrent/Transmission-style speed update.
+try await parityDownloader.setRateLimits(
+    uploadBytesPerSecond: 256 * 1024,
+    downloadBytesPerSecond: 4 * 1024 * 1024
+)
+
+// Throttled/coalesced speed updates for high-frequency UI sliders.
+await parityDownloader.scheduleRateLimits(
+    uploadBytesPerSecond: 512 * 1024,
+    downloadBytesPerSecond: 8 * 1024 * 1024,
+    throttleInterval: 0.2
+)
+
+// BitTorrent settings that can be changed at runtime without replaying the full config.
+try await parityDownloader.setConnectionLimits(
+    globalConnections: 500,
+    connectionSpeed: 40,
+    torrentConnectBoost: 80
+)
+try await parityDownloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
+try await parityDownloader.setRateLimitOptions(includeIPOverhead: true)
+```
+
+`nil` means "leave unchanged"; `0` keeps libtorrent's unlimited rate-limit semantics. Full `applyConfiguration` remains available for low-frequency configuration and persistence, but runtime speed and queue controls should use these narrow APIs to avoid changing unrelated network settings.
+
+### 7. Deferred Apply and Recovery Reannounce Hooks
 
 ```swift
 let session = await parityDownloader.session()
@@ -165,7 +200,7 @@ _ = try await session.handleSystemWakeupDetected()
 
 `handleNetworkPathChanged()` and `handleSystemWakeupDetected()` reopen libtorrent network sockets before reannounce whenever the native bridge supports it. On iOS, downstream apps should call these from `NWPathMonitor` updates and wake callbacks. The default `SessionConfiguration` listen interfaces are now explicit dual-stack bindings: `0.0.0.0:0,[::]:0`.
 
-### 7. Runtime Transport Behavior Controls (uTP/TCP)
+### 8. Runtime Transport Behavior Controls (uTP/TCP)
 
 ```swift
 // Immediate apply
@@ -173,7 +208,7 @@ try await parityDownloader.setTransportBehavior(.tcpOnly)
 
 // Debounced apply (for high-frequency toggles)
 await parityDownloader.scheduleTransportBehaviorApply(.preferTCP, debounceInterval: 0.2)
-_ = await parityDownloader.flushDeferredConfigurationApply()
+_ = await parityDownloader.flushDeferredRuntimePatch()
 ```
 
 Behavior mapping:
@@ -183,7 +218,7 @@ Behavior mapping:
 - `.tcpOnly`: enable TCP, disable uTP
 - `.utpOnly`: disable TCP, enable uTP
 
-### 8. Throughput Optimizer (P0-1/P0-2)
+### 9. Throughput Optimizer (P0-1/P0-2)
 
 ```swift
 await parityDownloader.startThroughputOptimizer(
@@ -205,7 +240,7 @@ What it does:
 - temporary throughput boost (`connectionSpeed`, `torrentConnectBoost`, request queues, peer turnover)
 - auto-restore baseline after stable recovery windows
 
-### 9. File priorities, trackers, and torrent control
+### 10. File priorities, trackers, and torrent control
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -224,7 +259,7 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 10. Save and restore
+### 11. Save and restore
 
 Durable restart recovery for iOS and macOS:
 
@@ -272,7 +307,7 @@ This version already includes:
 - proxy, encryption, queue, cache, and send-buffer session settings
 - qB-style swarm counters via torrent metrics (`peerCount/seedCount` + `peerTotalCount/seedTotalCount`)
 - deferred session configuration apply and batch reannounce recovery hooks
-- runtime uTP/TCP transport behavior control hooks
+- sparse runtime speed, connection, queue, rate-limit option, and uTP/TCP transport hooks
 
 ## HTTPS Trackers and TLS Backend
 
@@ -291,12 +326,12 @@ The public SwiftPM package is `remote-binary-only`.
 Current public package metadata:
 
 - Repository: `https://github.com/clOudbb/libtorrent-apple.git`
-- Latest published package version: `0.2.9`
-- Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.9/LibtorrentAppleBinary-0.2.9.zip`
-- Current binary module identity: `LibtorrentAppleBinary_0_2_9`
+- Latest published package version: `0.2.10`
+- Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.10/LibtorrentAppleBinary-0.2.10.zip`
+- Current binary module identity: `LibtorrentAppleBinary_0_2_10`
 
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
-- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_9`.
+- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_10`.
 - `PackageSupport/BinaryArtifact.env` is retained only as internal maintainer metadata; downstream SwiftPM consumers do not read it.
 
 Maintainer-only validation paths:
@@ -327,16 +362,16 @@ Validate tag switching in one shared cache directory:
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.8 \
-  --version-b 0.2.9
+  --version-a 0.2.9 \
+  --version-b 0.2.10
 ```
 
 Run a full local self-verification using the current working tree plus a synthetic next release:
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.9 \
-  --version-b 0.2.10-alpha.1
+  --version-a 0.2.10 \
+  --version-b 0.2.11-alpha.1
 ```
 
 Local self-verification rewrites the temporary validation tags to use `binaryTarget(path:)`.
@@ -349,7 +384,7 @@ Build the Apple frameworks:
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.9
+./scripts/make-xcframework.sh 0.2.10
 ```
 
 Run the local benchmark demo:
@@ -427,14 +462,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.10-alpha.1
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.10-alpha.1
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.11-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.11-alpha.1
 ```
 
 Override both dependencies in one release build:
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.10-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.11-alpha.1
 ```
 
 ## Release Model

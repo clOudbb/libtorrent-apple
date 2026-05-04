@@ -17,9 +17,11 @@ struct TorrentSessionTests {
     
         let decodedLegacy = try JSONDecoder().decode(TorrentBackendInfo.self, from: legacyJSON)
         #expect(decodedLegacy.supportsHTTPSTrackers == false)
+        #expect(decodedLegacy.supportsSessionRuntimeSettings == false)
     
         let current = LibtorrentApple.backendInfo
         _ = current.supportsHTTPSTrackers
+        _ = current.supportsSessionRuntimeSettings
     }
     
     @Test
@@ -309,6 +311,123 @@ struct TorrentSessionTests {
         #expect(manifest.configuration.userAgent == "tests/updated")
         #expect(manifest.configuration.activeDownloadsLimit == 3)
     }
+
+    @Test
+    func deferredConfigurationMarksPersistentStateDirtyBeforeApply() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleDeferredConfigDirty-\(UUID().uuidString)", isDirectory: true)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory, userAgent: "tests/original"),
+            rootDirectory: rootDirectory
+        )
+
+        _ = try await downloader.savePersistentState()
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        var updatedConfiguration = await downloader.configuration
+        updatedConfiguration.userAgent = "tests/deferred"
+        updatedConfiguration.activeDownloadsLimit = 7
+        await downloader.scheduleConfigurationApply(updatedConfiguration, debounceInterval: 60)
+
+        #expect(await downloader.hasPendingPersistentStateChanges())
+        #expect(await downloader.configuration.userAgent == "tests/original")
+
+        let flushedURL = try await downloader.flushScheduledPersistentStateSave()
+        #expect(flushedURL != nil)
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        let manifestData = try Data(contentsOf: try #require(flushedURL))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+
+        #expect(manifest.configuration.userAgent == "tests/deferred")
+        #expect(manifest.configuration.activeDownloadsLimit == 7)
+    }
+
+    @Test
+    func deferredRuntimePatchMarksPersistentStateDirtyBeforeApply() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleDeferredRuntimeDirty-\(UUID().uuidString)", isDirectory: true)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+
+        _ = try await downloader.savePersistentState()
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        await downloader.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionsLimit: 222),
+            debounceInterval: 60
+        )
+
+        #expect(await downloader.hasPendingPersistentStateChanges())
+
+        let flushedURL = try await downloader.flushScheduledPersistentStateSave()
+        #expect(flushedURL != nil)
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        let manifestData = try Data(contentsOf: try #require(flushedURL))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+
+        #expect(manifest.configuration.connectionsLimit == 222)
+        await downloader.stop()
+    }
+
+    @Test
+    func trailingRateLimitsMarkPersistentStateDirtyBeforeThrottleFlush() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleTrailingRateDirty-\(UUID().uuidString)", isDirectory: true)
+
+        let downloader = TorrentDownloader(
+            configuration: SessionConfiguration(downloadDirectory: rootDirectory),
+            rootDirectory: rootDirectory
+        )
+        try await downloader.start()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 32 * 1024,
+            downloadBytesPerSecond: 256 * 1024,
+            throttleInterval: 60
+        )
+        _ = try await downloader.savePersistentState()
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 60
+        )
+
+        #expect(await downloader.hasPendingPersistentStateChanges())
+
+        let flushedURL = try await downloader.flushScheduledPersistentStateSave()
+        #expect(flushedURL != nil)
+        #expect(!(await downloader.hasPendingPersistentStateChanges()))
+
+        let manifestData = try Data(contentsOf: try #require(flushedURL))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(PersistentStateManifest.self, from: manifestData)
+
+        #expect(manifest.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(manifest.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+        await downloader.stop()
+    }
     
     @Test
     func torrentHandleExposesFileAndPieceControls() async throws {
@@ -452,6 +571,424 @@ struct TorrentSessionTests {
         #expect(diagnostics.totalPeers >= 0)
         #expect(diagnostics.totalSeeds >= 0)
     }
+
+    @Test
+    func runtimePatchSettersApplyWithoutFullConfiguration() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleRuntimePatch-\(UUID().uuidString)", isDirectory: true)
+
+        var initialConfiguration = SessionConfiguration(downloadDirectory: rootDirectory)
+        initialConfiguration.enableDistributedHashTable = true
+        initialConfiguration.enableUPnP = false
+        initialConfiguration.enableNATPMP = false
+
+        let session = TorrentSession(configuration: initialConfiguration)
+        try await session.start()
+
+        try await session.setRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024
+        )
+        try await session.setConnectionLimits(
+            globalConnections: 420,
+            connectionSpeed: 35,
+            torrentConnectBoost: 70,
+            allowMultipleConnectionsPerIP: true
+        )
+        try await session.setActiveLimits(
+            downloads: -1,
+            seeds: -1,
+            checking: 1,
+            distributedHashTable: -1,
+            trackers: -1,
+            localPeerDiscovery: -1,
+            torrents: -1
+        )
+        try await session.setRateLimitOptions(includeIPOverhead: true)
+        try await session.setTransportBehavior(.tcpOnly)
+
+        let configuration = await session.configuration
+        #expect(configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+        #expect(configuration.connectionsLimit == 420)
+        #expect(configuration.connectionSpeed == 35)
+        #expect(configuration.torrentConnectBoost == 70)
+        #expect(configuration.activeDownloadsLimit == -1)
+        #expect(configuration.activeSeedsLimit == -1)
+        #expect(configuration.activeCheckingLimit == 1)
+        #expect(configuration.includeIPOverheadInRateLimit == true)
+        #expect(configuration.allowMultipleConnectionsPerIP == true)
+        #expect(configuration.enableOutgoingTCP == true)
+        #expect(configuration.enableIncomingTCP == true)
+        #expect(configuration.enableOutgoingUTP == false)
+        #expect(configuration.enableIncomingUTP == false)
+        #expect(configuration.mixedModeAlgorithm == .preferTCP)
+        #expect(configuration.enableDistributedHashTable == initialConfiguration.enableDistributedHashTable)
+        #expect(configuration.enableUPnP == initialConfiguration.enableUPnP)
+        #expect(configuration.enableNATPMP == initialConfiguration.enableNATPMP)
+    }
+
+    @Test
+    func runtimePatchRebasesPendingFullConfiguration() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        var pendingConfiguration = await session.configuration
+        pendingConfiguration.connectionsLimit = 321
+        await session.scheduleConfigurationApply(pendingConfiguration, debounceInterval: 60)
+
+        try await session.setRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024
+        )
+
+        let applied = await session.flushDeferredConfigurationApply()
+        #expect(applied)
+        #expect(await session.configuration.connectionsLimit == 321)
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+    }
+
+    @Test
+    func scheduledRateLimitsApplyImmediatelyThenCoalesceTrailingValue() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.05
+        )
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 256 * 1024,
+            downloadBytesPerSecond: 2 * 1024 * 1024,
+            throttleInterval: 0.05
+        )
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+
+        try await Task.sleep(nanoseconds: 90_000_000)
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 256 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 2 * 1024 * 1024)
+    }
+
+    @Test
+    func downloaderDeferredConfigurationFailureDoesNotCachePendingConfiguration() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibtorrentAppleDownloaderConfigRollback-\(UUID().uuidString)", isDirectory: true)
+        let downloader = TorrentDownloader(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
+        try await downloader.start()
+
+        let originalDirectory = await downloader.configuration.downloadDirectory
+        var invalidRuntimeConfiguration = await downloader.configuration
+        invalidRuntimeConfiguration.downloadDirectory = rootDirectory
+            .appendingPathComponent("RuntimeDirectoryChange", isDirectory: true)
+
+        await downloader.scheduleConfigurationApply(invalidRuntimeConfiguration, debounceInterval: 60)
+        #expect(await downloader.configuration.downloadDirectory == originalDirectory)
+
+        let applied = await downloader.flushDeferredConfigurationApply()
+        #expect(!applied)
+        #expect(await downloader.configuration.downloadDirectory == originalDirectory)
+    }
+
+    @Test
+    func downloaderScheduledRateLimitsSynchronizeCachedConfigurationAfterTrailingApply() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.05
+        )
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024,
+            throttleInterval: 0.05
+        )
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+    }
+
+    @Test
+    func downloaderScheduledRateLimitsDoNotFlushBeforeSessionThrottleWindow() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.2
+        )
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024,
+            throttleInterval: 0.02
+        )
+
+        try await Task.sleep(nanoseconds: 90_000_000)
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+
+        _ = await downloader.flushScheduledRateLimits()
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+    }
+
+    @Test
+    func downloaderScheduledRateLimitsDoNotLeaveConfigurationStalePastSessionThrottleWindow() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.05
+        )
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024,
+            throttleInterval: 0.2
+        )
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+    }
+
+    @Test
+    func downloaderManualRateLimitFlushCancelsStaleSyncTask() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 32 * 1024,
+            downloadBytesPerSecond: 256 * 1024,
+            throttleInterval: 0.08
+        )
+        _ = await downloader.flushScheduledRateLimits()
+
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.2
+        )
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024,
+            throttleInterval: 0.2
+        )
+
+        try await Task.sleep(nanoseconds: 110_000_000)
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+
+        _ = await downloader.flushScheduledRateLimits()
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+    }
+
+    @Test
+    func downloaderKeepsSeparateSyncsForDifferentDeferredOperations() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        var pendingConfiguration = await downloader.configuration
+        pendingConfiguration.connectionsLimit = 321
+
+        await downloader.scheduleConfigurationApply(pendingConfiguration, debounceInterval: 0.12)
+        await downloader.scheduleRateLimits(
+            uploadBytesPerSecond: 96 * 1024,
+            downloadBytesPerSecond: 768 * 1024,
+            throttleInterval: 0.02
+        )
+
+        try await Task.sleep(nanoseconds: 70_000_000)
+        #expect(await downloader.configuration.uploadRateLimitBytesPerSecond == 96 * 1024)
+        #expect(await downloader.configuration.downloadRateLimitBytesPerSecond == 768 * 1024)
+
+        try await Task.sleep(nanoseconds: 120_000_000)
+        #expect(await downloader.configuration.connectionsLimit == 321)
+    }
+
+    @Test
+    func flushedScheduledRateLimitTaskDoesNotApplyNewerWindowEarly() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 32 * 1024,
+            downloadBytesPerSecond: 256 * 1024,
+            throttleInterval: 0.08
+        )
+        _ = await session.flushScheduledRateLimits()
+
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.2
+        )
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 128 * 1024,
+            downloadBytesPerSecond: 1024 * 1024,
+            throttleInterval: 0.2
+        )
+
+        try await Task.sleep(nanoseconds: 110_000_000)
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+
+        _ = await session.flushScheduledRateLimits()
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 128 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 1024 * 1024)
+    }
+
+    @Test
+    func scheduledRateLimitsMergeTrailingSparseValues() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 32 * 1024,
+            downloadBytesPerSecond: 256 * 1024,
+            throttleInterval: 0.2
+        )
+        await session.scheduleRateLimits(
+            uploadBytesPerSecond: 64 * 1024,
+            throttleInterval: 0.2
+        )
+        await session.scheduleRateLimits(
+            downloadBytesPerSecond: 512 * 1024,
+            throttleInterval: 0.2
+        )
+
+        _ = await session.flushScheduledRateLimits()
+        #expect(await session.configuration.uploadRateLimitBytesPerSecond == 64 * 1024)
+        #expect(await session.configuration.downloadRateLimitBytesPerSecond == 512 * 1024)
+    }
+
+    @Test
+    func flushedDeferredRuntimePatchTaskDoesNotApplyNewerWindowEarly() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        await session.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionsLimit: 111),
+            debounceInterval: 0.08
+        )
+        _ = await session.flushDeferredRuntimePatch()
+
+        await session.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionsLimit: 222),
+            debounceInterval: 0.2
+        )
+        await session.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionsLimit: 333),
+            debounceInterval: 0.2
+        )
+
+        try await Task.sleep(nanoseconds: 110_000_000)
+        #expect(await session.configuration.connectionsLimit == 111)
+
+        _ = await session.flushDeferredRuntimePatch()
+        #expect(await session.configuration.connectionsLimit == 333)
+    }
+
+    @Test
+    func scheduledRuntimePatchMergesSparseValuesBeforeDebounce() async throws {
+        guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let session = TorrentSession()
+        try await session.start()
+
+        await session.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionsLimit: 111),
+            debounceInterval: 0.2
+        )
+        await session.scheduleRuntimePatch(
+            SessionRuntimePatch(connectionSpeed: 22),
+            debounceInterval: 0.2
+        )
+
+        _ = await session.flushDeferredRuntimePatch()
+        #expect(await session.configuration.connectionsLimit == 111)
+        #expect(await session.configuration.connectionSpeed == 22)
+    }
+
+    @Test
+    func downloaderTransportFallbackMergesPendingConfiguration() async throws {
+        guard !LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+            return
+        }
+
+        let downloader = TorrentDownloader()
+        try await downloader.start()
+
+        var pending = await downloader.configuration
+        pending.connectionsLimit = 321
+        await downloader.scheduleConfigurationApply(pending, debounceInterval: 0.2)
+        await downloader.scheduleTransportBehaviorApply(.utpOnly, debounceInterval: 0.2)
+
+        let applied = await downloader.flushDeferredConfigurationApply()
+        #expect(applied)
+        #expect(await downloader.configuration.connectionsLimit == 321)
+        #expect(await downloader.configuration.enableOutgoingTCP == false)
+        #expect(await downloader.configuration.enableIncomingTCP == false)
+        #expect(await downloader.configuration.enableOutgoingUTP == true)
+        #expect(await downloader.configuration.enableIncomingUTP == true)
+        #expect(await downloader.configuration.mixedModeAlgorithm == .peerProportional)
+    }
     
     @Test
     func sessionProfilesApplyExpectedDefaults() async throws {
@@ -590,7 +1127,12 @@ struct TorrentSessionTests {
         #expect(await session.configuration.mixedModeAlgorithm == .preferTCP)
     
         await session.scheduleTransportBehaviorApply(.utpOnly, debounceInterval: 0.01)
-        let applied = await session.flushDeferredConfigurationApply()
+        let applied =
+            if LibtorrentApple.backendSupportsSessionRuntimeSettings {
+                await session.flushDeferredRuntimePatch()
+            } else {
+                await session.flushDeferredConfigurationApply()
+            }
         #expect(applied)
         #expect(await session.configuration.enableOutgoingTCP == false)
         #expect(await session.configuration.enableIncomingTCP == false)

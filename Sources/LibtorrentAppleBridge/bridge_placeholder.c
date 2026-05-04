@@ -303,6 +303,10 @@ bool libtorrent_apple_bridge_supports_https_trackers(void) {
     return false;
 }
 
+bool libtorrent_apple_bridge_supports_session_runtime_settings(void) {
+    return true;
+}
+
 int32_t libtorrent_apple_required_alert_mask(void) {
     return LIBTORRENT_APPLE_DEFAULT_ALERT_MASK;
 }
@@ -387,6 +391,105 @@ bool libtorrent_apple_session_apply_configuration(
     session->configuration = *configuration;
     push_alert(session, 1018, "placeholder_session_configuration_applied", "Placeholder session configuration applied.", "");
     return true;
+}
+
+bool libtorrent_apple_session_apply_runtime_settings(
+    libtorrent_apple_session_t *session,
+    const libtorrent_apple_session_runtime_settings_t *settings,
+    libtorrent_apple_error_t *error_out
+) {
+    clear_error(error_out);
+
+    if (session == NULL) {
+        return fail(error_out, -1, "session must not be null");
+    }
+
+    if (settings == NULL) {
+        return fail(error_out, -1, "settings must not be null");
+    }
+
+    if (settings->has_upload_rate_limit) {
+        session->configuration.upload_rate_limit = settings->upload_rate_limit < 0 ? 0 : settings->upload_rate_limit;
+    }
+    if (settings->has_download_rate_limit) {
+        session->configuration.download_rate_limit = settings->download_rate_limit < 0 ? 0 : settings->download_rate_limit;
+    }
+    if (settings->has_connections_limit) {
+        session->configuration.connections_limit = settings->connections_limit < -1 ? -1 : settings->connections_limit;
+    }
+    if (settings->has_active_downloads_limit) {
+        session->configuration.active_downloads_limit =
+            settings->active_downloads_limit < -1 ? -1 : settings->active_downloads_limit;
+    }
+    if (settings->has_active_seeds_limit) {
+        session->configuration.active_seeds_limit =
+            settings->active_seeds_limit < -1 ? -1 : settings->active_seeds_limit;
+    }
+    if (settings->has_active_checking_limit) {
+        session->configuration.active_checking_limit =
+            settings->active_checking_limit < -1 ? -1 : settings->active_checking_limit;
+    }
+    if (settings->has_active_dht_limit) {
+        session->configuration.active_dht_limit =
+            settings->active_dht_limit < -1 ? -1 : settings->active_dht_limit;
+    }
+    if (settings->has_active_tracker_limit) {
+        session->configuration.active_tracker_limit =
+            settings->active_tracker_limit < -1 ? -1 : settings->active_tracker_limit;
+    }
+    if (settings->has_active_lsd_limit) {
+        session->configuration.active_lsd_limit =
+            settings->active_lsd_limit < -1 ? -1 : settings->active_lsd_limit;
+    }
+    if (settings->has_active_limit) {
+        session->configuration.active_limit = settings->active_limit < -1 ? -1 : settings->active_limit;
+    }
+    if (settings->has_connection_speed) {
+        session->configuration.connection_speed = settings->connection_speed < 0 ? 0 : settings->connection_speed;
+    }
+    if (settings->has_torrent_connect_boost) {
+        session->configuration.torrent_connect_boost =
+            settings->torrent_connect_boost < 0 ? 0 : settings->torrent_connect_boost;
+    }
+    if (settings->has_mixed_mode_algorithm) {
+        if (settings->mixed_mode_algorithm < 0 || settings->mixed_mode_algorithm > 1) {
+            return fail(error_out, -1, "invalid value for mixed_mode_algorithm");
+        }
+        session->configuration.mixed_mode_algorithm = settings->mixed_mode_algorithm;
+    }
+    if (settings->has_rate_limit_ip_overhead) {
+        session->configuration.rate_limit_ip_overhead = settings->rate_limit_ip_overhead ? 1 : 0;
+    }
+    if (settings->has_allow_multiple_connections_per_ip) {
+        session->configuration.allow_multiple_connections_per_ip =
+            settings->allow_multiple_connections_per_ip ? 1 : 0;
+    }
+    if (settings->has_enable_outgoing_tcp) {
+        session->configuration.enable_outgoing_tcp = settings->enable_outgoing_tcp ? 1 : 0;
+    }
+    if (settings->has_enable_incoming_tcp) {
+        session->configuration.enable_incoming_tcp = settings->enable_incoming_tcp ? 1 : 0;
+    }
+    if (settings->has_enable_outgoing_utp) {
+        session->configuration.enable_outgoing_utp = settings->enable_outgoing_utp ? 1 : 0;
+    }
+    if (settings->has_enable_incoming_utp) {
+        session->configuration.enable_incoming_utp = settings->enable_incoming_utp ? 1 : 0;
+    }
+    if (settings->has_auto_sequential) {
+        session->configuration.auto_sequential = settings->auto_sequential;
+    }
+
+    push_alert(session, 1020, "placeholder_session_runtime_settings_applied", "Placeholder session runtime settings applied.", "");
+    return true;
+}
+
+bool libtorrent_apple_bridge_session_apply_runtime_settings(
+    libtorrent_apple_session_t *session,
+    const libtorrent_apple_bridge_session_runtime_settings_t *settings,
+    libtorrent_apple_error_t *error_out
+) {
+    return libtorrent_apple_session_apply_runtime_settings(session, settings, error_out);
 }
 
 bool libtorrent_apple_session_reopen_network_sockets(

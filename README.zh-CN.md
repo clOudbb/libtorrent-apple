@@ -8,7 +8,7 @@
 ## 这个仓库能给你什么
 
 - 一个对外的 SwiftPM 产品：`LibtorrentApple`
-- 一个稳定桥接 target，底层使用版本化内部二进制 target，当前为 `LibtorrentAppleBinary_0_2_9`
+- 一个稳定桥接 target，底层使用版本化内部二进制 target，当前为 `LibtorrentAppleBinary_0_2_10`
 - `iOS 真机`、`iOS 模拟器`、`macOS` 三套产物
 - 一套可以产出 GitHub Release 二进制包的自动化脚本
 - 一套已经覆盖 `iTorrent`、`anitorrent` 这类项目 BT 核心能力的 Swift API
@@ -18,7 +18,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.9")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.10")
 ```
 
 导入模块：
@@ -142,9 +142,45 @@ try await parityDownloader.setPeerFilters(
 - `.qBittorrentParityV1`：qB 风格吞吐策略，显式对齐 request queue、AIO、file pool、send buffer、tracker announce 和偏 TCP 的混合传输默认值
 - `.transmissionParityV1`：Transmission 风格均衡策略，降低全局 peer 压力，保留下载队列、request queue 对齐和 uTP/TCP 公平性
 
-这些策略只是基于公开 `SessionConfiguration` API 的便捷 preset。下游可以先应用参考策略再覆盖任意已暴露字段，也可以完全跳过 preset 直接构建自定义配置。`SessionProfile.throughputReferenceProfiles` 可用于枚举三套正式吞吐参考策略。
+这些策略只是基于公开 `SessionConfiguration` API 的便捷 preset。下游可以先应用参考策略再覆盖任意已暴露字段，也可以完全跳过 preset 直接构建自定义配置。`SessionProfile.throughputReferenceProfiles` 可用于枚举三套正式吞吐参考策略。建议尽量在 session 启动前应用 profile；高频运行时控制应使用下面的窄粒度 setter。
 
-### 6. 文件优先级、tracker 和 torrent 控制
+### 6. 运行时 Speed 与 BitTorrent 设置
+
+上传/下载限速和核心 BT 控制已经拆成 sparse runtime patch，下游不需要为了一个滑条变化反复提交完整 `SessionConfiguration`。
+
+```swift
+guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
+    // 使用 v0.2.10+ binary artifact，或回退到低频 applyConfiguration。
+    return
+}
+
+// 类似 qBittorrent / Transmission 的立即限速更新。
+try await downloader.setRateLimits(
+    uploadBytesPerSecond: 256 * 1024,
+    downloadBytesPerSecond: 4 * 1024 * 1024
+)
+
+// 给 UI slider 使用的 throttle/coalesce 更新：第一笔尽快生效，短窗口内只保留最后一笔。
+await downloader.scheduleRateLimits(
+    uploadBytesPerSecond: 512 * 1024,
+    downloadBytesPerSecond: 8 * 1024 * 1024,
+    throttleInterval: 0.2
+)
+
+// 可运行时调整的 BitTorrent 设置，不会重放完整配置。
+try await downloader.setConnectionLimits(
+    globalConnections: 500,
+    connectionSpeed: 40,
+    torrentConnectBoost: 80
+)
+try await downloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
+try await downloader.setRateLimitOptions(includeIPOverhead: true)
+try await downloader.setTransportBehavior(.tcpOnly)
+```
+
+这些 API 中 `nil` 表示“不改”，`0` 保持 libtorrent 的不限速语义。`applyConfiguration` 仍用于初始化、持久化恢复和低频完整配置；运行时 speed、queue、connection、transport 控制应优先使用窄 API，避免夹带 DHT、UPnP、监听端口等无关设置。
+
+### 7. 文件优先级、tracker 和 torrent 控制
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -163,7 +199,7 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 7. 保存和恢复
+### 8. 保存和恢复
 
 适用于 iOS / macOS 重启后的持久化恢复：
 
@@ -235,12 +271,12 @@ _ = try await downloader.handleSystemWakeupDetected()
 当前公开包信息：
 
 - 仓库：`https://github.com/clOudbb/libtorrent-apple.git`
-- 最新公开包版本：`0.2.9`
-- 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.9/LibtorrentAppleBinary-0.2.9.zip`
-- 当前 binary module 身份：`LibtorrentAppleBinary_0_2_9`
+- 最新公开包版本：`0.2.10`
+- 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.10/LibtorrentAppleBinary-0.2.10.zip`
+- 当前 binary module 身份：`LibtorrentAppleBinary_0_2_10`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
-- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_9`。
+- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_10`。
 - `PackageSupport/BinaryArtifact.env` 只保留给维护者脚本使用，不再参与下游 SwiftPM 解析。
 
 仅供维护者使用的验证路径：
@@ -261,7 +297,7 @@ _ = try await downloader.handleSystemWakeupDetected()
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.9
+./scripts/make-xcframework.sh 0.2.10
 ```
 
 验证 local-binary dev package：
@@ -281,16 +317,16 @@ _ = try await downloader.handleSystemWakeupDetected()
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.8 \
-  --version-b 0.2.9
+  --version-a 0.2.9 \
+  --version-b 0.2.10
 ```
 
 用当前工作区做一次完整的本地自验：
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.9 \
-  --version-b 0.2.10-alpha.1
+  --version-a 0.2.10 \
+  --version-b 0.2.11-alpha.1
 ```
 
 本地自验会把临时验证 tag 改写成 `binaryTarget(path:)`。
@@ -335,14 +371,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.10-alpha.1
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.10-alpha.1
+LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.11-alpha.1
+OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.11-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.10-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.11-alpha.1
 ```
 
 ## Release 与 SwiftPM 的关系

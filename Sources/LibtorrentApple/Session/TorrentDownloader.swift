@@ -5,12 +5,19 @@ import FoundationNetworking
 #endif
 
 public actor TorrentDownloader {
+    private enum ConfigurationSyncOperation: Sendable, Hashable {
+        case deferredConfiguration
+        case deferredRuntimePatch
+        case scheduledRateLimits
+    }
+
     public let backendInfo: TorrentBackendInfo
     public let rootDirectory: URL
     public private(set) var configuration: SessionConfiguration
 
     private let sessionStorage: TorrentSession
     private var persistentStateSaveTask: Task<URL?, Never>?
+    private var configurationSyncTasks: [ConfigurationSyncOperation: Task<Void, Never>] = [:]
     private var lastPersistedPersistentStateRevision: UInt64 = 0
 
     public init(
@@ -60,16 +67,112 @@ public actor TorrentDownloader {
         _ configuration: SessionConfiguration,
         debounceInterval: TimeInterval = 0.2
     ) async {
-        self.configuration = configuration
         await sessionStorage.scheduleConfigurationApply(configuration, debounceInterval: debounceInterval)
+        scheduleConfigurationSync(after: debounceInterval, operation: .deferredConfiguration)
     }
 
     @discardableResult
     public func flushDeferredConfigurationApply() async -> Bool {
         let applied = await sessionStorage.flushDeferredConfigurationApply()
-        if applied {
-            self.configuration = await sessionStorage.configuration
-        }
+        self.configuration = await sessionStorage.configuration
+        return applied
+    }
+
+    public func applyRuntimePatch(_ patch: SessionRuntimePatch) async throws {
+        try await sessionStorage.applyRuntimePatch(patch)
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func setRateLimits(
+        uploadBytesPerSecond: Int? = nil,
+        downloadBytesPerSecond: Int? = nil
+    ) async throws {
+        try await sessionStorage.setRateLimits(
+            uploadBytesPerSecond: uploadBytesPerSecond,
+            downloadBytesPerSecond: downloadBytesPerSecond
+        )
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func scheduleRateLimits(
+        uploadBytesPerSecond: Int? = nil,
+        downloadBytesPerSecond: Int? = nil,
+        throttleInterval: TimeInterval = 0.2
+    ) async {
+        await sessionStorage.scheduleRateLimits(
+            uploadBytesPerSecond: uploadBytesPerSecond,
+            downloadBytesPerSecond: downloadBytesPerSecond,
+            throttleInterval: throttleInterval
+        )
+        self.configuration = await sessionStorage.configuration
+        scheduleConfigurationSync(after: throttleInterval, operation: .scheduledRateLimits, restartExisting: false)
+    }
+
+    @discardableResult
+    public func flushScheduledRateLimits() async -> Bool {
+        configurationSyncTasks[.scheduledRateLimits]?.cancel()
+        configurationSyncTasks[.scheduledRateLimits] = nil
+        let applied = await sessionStorage.flushScheduledRateLimits()
+        self.configuration = await sessionStorage.configuration
+        return applied
+    }
+
+    public func setConnectionLimits(
+        globalConnections: Int? = nil,
+        connectionSpeed: Int? = nil,
+        torrentConnectBoost: Int? = nil,
+        allowMultipleConnectionsPerIP: Bool? = nil
+    ) async throws {
+        try await sessionStorage.setConnectionLimits(
+            globalConnections: globalConnections,
+            connectionSpeed: connectionSpeed,
+            torrentConnectBoost: torrentConnectBoost,
+            allowMultipleConnectionsPerIP: allowMultipleConnectionsPerIP
+        )
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func setActiveLimits(
+        downloads: Int? = nil,
+        seeds: Int? = nil,
+        checking: Int? = nil,
+        distributedHashTable: Int? = nil,
+        trackers: Int? = nil,
+        localPeerDiscovery: Int? = nil,
+        torrents: Int? = nil
+    ) async throws {
+        try await sessionStorage.setActiveLimits(
+            downloads: downloads,
+            seeds: seeds,
+            checking: checking,
+            distributedHashTable: distributedHashTable,
+            trackers: trackers,
+            localPeerDiscovery: localPeerDiscovery,
+            torrents: torrents
+        )
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func setRateLimitOptions(
+        includeIPOverhead: Bool? = nil
+    ) async throws {
+        try await sessionStorage.setRateLimitOptions(includeIPOverhead: includeIPOverhead)
+        self.configuration = await sessionStorage.configuration
+    }
+
+    public func scheduleRuntimePatch(
+        _ patch: SessionRuntimePatch,
+        debounceInterval: TimeInterval = 0.2
+    ) async {
+        await sessionStorage.scheduleRuntimePatch(patch, debounceInterval: debounceInterval)
+        self.configuration = await sessionStorage.configuration
+        scheduleConfigurationSync(after: debounceInterval, operation: .deferredRuntimePatch)
+    }
+
+    @discardableResult
+    public func flushDeferredRuntimePatch() async -> Bool {
+        let applied = await sessionStorage.flushDeferredRuntimePatch()
+        self.configuration = await sessionStorage.configuration
         return applied
     }
 
@@ -88,17 +191,21 @@ public actor TorrentDownloader {
     }
 
     public func setTransportBehavior(_ behavior: SessionTransportBehavior) async throws {
-        let updated = configuration.applyingTransportBehavior(behavior)
-        try await applyConfiguration(updated)
+        try await sessionStorage.setTransportBehavior(behavior)
+        self.configuration = await sessionStorage.configuration
     }
 
     public func scheduleTransportBehaviorApply(
         _ behavior: SessionTransportBehavior,
         debounceInterval: TimeInterval = 0.2
     ) async {
-        let updated = configuration.applyingTransportBehavior(behavior)
-        self.configuration = updated
-        await sessionStorage.scheduleConfigurationApply(updated, debounceInterval: debounceInterval)
+        await sessionStorage.scheduleTransportBehaviorApply(behavior, debounceInterval: debounceInterval)
+        self.configuration = await sessionStorage.configuration
+        let syncOperation: ConfigurationSyncOperation =
+            LibtorrentApple.backendSupportsSessionRuntimeSettings
+            ? .deferredRuntimePatch
+            : .deferredConfiguration
+        scheduleConfigurationSync(after: debounceInterval, operation: syncOperation)
     }
 
     public func startThroughputOptimizer(
@@ -119,6 +226,10 @@ public actor TorrentDownloader {
     public func stop() async {
         persistentStateSaveTask?.cancel()
         persistentStateSaveTask = nil
+        for task in configurationSyncTasks.values {
+            task.cancel()
+        }
+        configurationSyncTasks.removeAll()
         await sessionStorage.stop()
     }
 
@@ -675,5 +786,39 @@ public actor TorrentDownloader {
 
         let sanitized = String(scalarView).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
         return sanitized.isEmpty ? "torrent" : sanitized
+    }
+
+    private func scheduleConfigurationSync(
+        after interval: TimeInterval,
+        operation: ConfigurationSyncOperation,
+        restartExisting: Bool = true
+    ) {
+        if !restartExisting, configurationSyncTasks[operation] != nil {
+            return
+        }
+
+        configurationSyncTasks[operation]?.cancel()
+        configurationSyncTasks[operation] = Task { [weak self] in
+            do {
+                try await AsyncTiming.sleep(seconds: interval)
+            } catch {
+                return
+            }
+
+            await self?.syncConfigurationFromSession(afterFlushing: operation)
+        }
+    }
+
+    private func syncConfigurationFromSession(afterFlushing operation: ConfigurationSyncOperation) async {
+        configurationSyncTasks[operation] = nil
+        switch operation {
+        case .deferredConfiguration:
+            _ = await sessionStorage.flushDeferredConfigurationApply()
+        case .deferredRuntimePatch:
+            _ = await sessionStorage.flushDeferredRuntimePatch()
+        case .scheduledRateLimits:
+            _ = await sessionStorage.flushScheduledRateLimits()
+        }
+        configuration = await sessionStorage.configuration
     }
 }

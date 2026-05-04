@@ -71,12 +71,15 @@ public enum LibtorrentApple {
     public static let bridgeVersion = String(cString: libtorrent_apple_bridge_version())
     public static let backendAvailable = libtorrent_apple_bridge_is_available()
     public static let backendSupportsHTTPSTrackers = libtorrent_apple_bridge_supports_https_trackers()
+    public static let backendSupportsSessionRuntimeSettings =
+        libtorrent_apple_bridge_supports_session_runtime_settings()
     public static let backendInfo = TorrentBackendInfo(
         vendor: "libtorrent",
         libraryVersion: bridgeVersion,
         bridgeVersion: bridgeVersion,
         packageName: packageName,
-        supportsHTTPSTrackers: backendSupportsHTTPSTrackers
+        supportsHTTPSTrackers: backendSupportsHTTPSTrackers,
+        supportsSessionRuntimeSettings: backendSupportsSessionRuntimeSettings
     )
 }
 
@@ -120,6 +123,99 @@ enum BridgeRuntime {
 
         guard libtorrent_apple_session_apply_configuration(session, &nativeConfiguration, &nativeError) else {
             throw error(from: nativeError, fallbackMessage: "Failed to apply session configuration.")
+        }
+    }
+
+    static func applyRuntimePatch(session: BridgeSessionHandle, patch: SessionRuntimePatch) throws {
+        guard !patch.isEmpty else {
+            return
+        }
+
+        var nativeSettings = libtorrent_apple_bridge_session_runtime_settings_t()
+        if let value = patch.uploadRateLimitBytesPerSecond {
+            nativeSettings.has_upload_rate_limit = true
+            nativeSettings.upload_rate_limit = Int32(clamping: value)
+        }
+        if let value = patch.downloadRateLimitBytesPerSecond {
+            nativeSettings.has_download_rate_limit = true
+            nativeSettings.download_rate_limit = Int32(clamping: value)
+        }
+        if let value = patch.connectionsLimit {
+            nativeSettings.has_connections_limit = true
+            nativeSettings.connections_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeDownloadsLimit {
+            nativeSettings.has_active_downloads_limit = true
+            nativeSettings.active_downloads_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeSeedsLimit {
+            nativeSettings.has_active_seeds_limit = true
+            nativeSettings.active_seeds_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeCheckingLimit {
+            nativeSettings.has_active_checking_limit = true
+            nativeSettings.active_checking_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeDistributedHashTableLimit {
+            nativeSettings.has_active_dht_limit = true
+            nativeSettings.active_dht_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeTrackerLimit {
+            nativeSettings.has_active_tracker_limit = true
+            nativeSettings.active_tracker_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeLocalPeerDiscoveryLimit {
+            nativeSettings.has_active_lsd_limit = true
+            nativeSettings.active_lsd_limit = Int32(clamping: value)
+        }
+        if let value = patch.activeTorrentLimit {
+            nativeSettings.has_active_limit = true
+            nativeSettings.active_limit = Int32(clamping: value)
+        }
+        if let value = patch.connectionSpeed {
+            nativeSettings.has_connection_speed = true
+            nativeSettings.connection_speed = Int32(clamping: value)
+        }
+        if let value = patch.torrentConnectBoost {
+            nativeSettings.has_torrent_connect_boost = true
+            nativeSettings.torrent_connect_boost = Int32(clamping: value)
+        }
+        if let value = patch.includeIPOverheadInRateLimit {
+            nativeSettings.has_rate_limit_ip_overhead = true
+            nativeSettings.rate_limit_ip_overhead = value
+        }
+        if let value = patch.allowMultipleConnectionsPerIP {
+            nativeSettings.has_allow_multiple_connections_per_ip = true
+            nativeSettings.allow_multiple_connections_per_ip = value
+        }
+        if let value = patch.enableOutgoingTCP {
+            nativeSettings.has_enable_outgoing_tcp = true
+            nativeSettings.enable_outgoing_tcp = value
+        }
+        if let value = patch.enableIncomingTCP {
+            nativeSettings.has_enable_incoming_tcp = true
+            nativeSettings.enable_incoming_tcp = value
+        }
+        if let value = patch.enableOutgoingUTP {
+            nativeSettings.has_enable_outgoing_utp = true
+            nativeSettings.enable_outgoing_utp = value
+        }
+        if let value = patch.enableIncomingUTP {
+            nativeSettings.has_enable_incoming_utp = true
+            nativeSettings.enable_incoming_utp = value
+        }
+        if let value = patch.mixedModeAlgorithm {
+            nativeSettings.has_mixed_mode_algorithm = true
+            nativeSettings.mixed_mode_algorithm = value.rawValue
+        }
+        if let value = patch.autoSequentialDownload {
+            nativeSettings.has_auto_sequential = true
+            nativeSettings.auto_sequential = value
+        }
+
+        var nativeError = libtorrent_apple_error_t()
+        guard libtorrent_apple_bridge_session_apply_runtime_settings(session, &nativeSettings, &nativeError) else {
+            throw error(from: nativeError, fallbackMessage: "Failed to apply session runtime settings.")
         }
     }
 

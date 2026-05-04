@@ -53,6 +53,10 @@ public actor TorrentSession {
     private var alertPollTask: Task<Void, Never>?
     private var deferredApplyTask: Task<Void, Never>?
     private var deferredConfiguration: SessionConfiguration?
+    private var deferredRuntimePatchTask: Task<Void, Never>?
+    private var deferredRuntimePatch: SessionRuntimePatch?
+    private var scheduledRateLimitsTask: Task<Void, Never>?
+    private var scheduledRateLimitsPatch: SessionRuntimePatch?
     private var throughputOptimizerTask: Task<Void, Never>?
     private var throughputOptimizerPolicy: SessionThroughputOptimizerPolicy?
     private var throughputOptimizerBaseConfiguration: SessionConfiguration?
@@ -231,6 +235,217 @@ public actor TorrentSession {
         try applyConfiguration(configuration.applyingProfile(profile))
     }
 
+    public func applyRuntimePatch(_ patch: SessionRuntimePatch) throws {
+        guard !patch.isEmpty else {
+            return
+        }
+
+        if !isRunning {
+            configuration.applyRuntimePatch(patch)
+            rebaseDeferredConfiguration(on: patch)
+            bumpPersistentStateRevision()
+            return
+        }
+
+        let session = try requireRunningSession()
+        do {
+            try BridgeRuntime.applyRuntimePatch(session: session, patch: patch)
+            configuration.applyRuntimePatch(patch)
+            rebaseDeferredConfiguration(on: patch)
+            if throughputOptimizerPolicy != nil,
+               !throughputOptimizerInternalApply,
+               !throughputOptimizerState.isBoosted
+            {
+                throughputOptimizerBaseConfiguration = configuration
+            }
+            bumpPersistentStateRevision()
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_runtime_settings_applied",
+                message: "Applied session runtime settings."
+            )
+        } catch {
+            throw translatedConfigurationError(error)
+        }
+    }
+
+    public func setRateLimits(
+        uploadBytesPerSecond: Int? = nil,
+        downloadBytesPerSecond: Int? = nil
+    ) throws {
+        try applyRuntimePatch(
+            SessionRuntimePatch(
+                uploadRateLimitBytesPerSecond: uploadBytesPerSecond,
+                downloadRateLimitBytesPerSecond: downloadBytesPerSecond
+            )
+        )
+    }
+
+    public func scheduleRateLimits(
+        uploadBytesPerSecond: Int? = nil,
+        downloadBytesPerSecond: Int? = nil,
+        throttleInterval: TimeInterval = 0.2
+    ) {
+        let patch = SessionRuntimePatch(
+            uploadRateLimitBytesPerSecond: uploadBytesPerSecond,
+            downloadRateLimitBytesPerSecond: downloadBytesPerSecond
+        )
+
+        guard !patch.isEmpty else {
+            return
+        }
+
+        guard scheduledRateLimitsTask != nil else {
+            do {
+                try applyRuntimePatch(patch)
+            } catch {
+                emitAlert(
+                    .nativeEvent,
+                    nativeEventName: "session_rate_limits_apply_failed",
+                    message: "Rate limits apply failed: \(error.localizedDescription)"
+                )
+                return
+            }
+
+            scheduledRateLimitsTask = Task { [weak self] in
+                do {
+                    try await AsyncTiming.sleep(seconds: throttleInterval)
+                } catch {
+                    return
+                }
+
+                await self?.flushScheduledRateLimits()
+            }
+            return
+        }
+
+        scheduledRateLimitsPatch = scheduledRateLimitsPatch?.merging(patch) ?? patch
+        bumpPersistentStateRevision()
+    }
+
+    @discardableResult
+    public func flushScheduledRateLimits() async -> Bool {
+        scheduledRateLimitsTask?.cancel()
+        scheduledRateLimitsTask = nil
+        guard let patch = scheduledRateLimitsPatch else {
+            return false
+        }
+        scheduledRateLimitsPatch = nil
+
+        do {
+            try applyRuntimePatch(patch)
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_rate_limits_applied_scheduled",
+                message: "Applied scheduled rate limits."
+            )
+            return true
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_rate_limits_apply_scheduled_failed",
+                message: "Scheduled rate limits apply failed: \(error.localizedDescription)"
+            )
+            return false
+        }
+    }
+
+    public func setConnectionLimits(
+        globalConnections: Int? = nil,
+        connectionSpeed: Int? = nil,
+        torrentConnectBoost: Int? = nil,
+        allowMultipleConnectionsPerIP: Bool? = nil
+    ) throws {
+        try applyRuntimePatch(
+            SessionRuntimePatch(
+                connectionsLimit: globalConnections,
+                connectionSpeed: connectionSpeed,
+                torrentConnectBoost: torrentConnectBoost,
+                allowMultipleConnectionsPerIP: allowMultipleConnectionsPerIP
+            )
+        )
+    }
+
+    public func setActiveLimits(
+        downloads: Int? = nil,
+        seeds: Int? = nil,
+        checking: Int? = nil,
+        distributedHashTable: Int? = nil,
+        trackers: Int? = nil,
+        localPeerDiscovery: Int? = nil,
+        torrents: Int? = nil
+    ) throws {
+        try applyRuntimePatch(
+            SessionRuntimePatch(
+                activeDownloadsLimit: downloads,
+                activeSeedsLimit: seeds,
+                activeCheckingLimit: checking,
+                activeDistributedHashTableLimit: distributedHashTable,
+                activeTrackerLimit: trackers,
+                activeLocalPeerDiscoveryLimit: localPeerDiscovery,
+                activeTorrentLimit: torrents
+            )
+        )
+    }
+
+    public func setRateLimitOptions(
+        includeIPOverhead: Bool? = nil
+    ) throws {
+        try applyRuntimePatch(
+            SessionRuntimePatch(includeIPOverheadInRateLimit: includeIPOverhead)
+        )
+    }
+
+    public func scheduleRuntimePatch(
+        _ patch: SessionRuntimePatch,
+        debounceInterval: TimeInterval = 0.2
+    ) {
+        guard !patch.isEmpty else {
+            return
+        }
+
+        deferredRuntimePatch = deferredRuntimePatch?.merging(patch) ?? patch
+        bumpPersistentStateRevision()
+        deferredRuntimePatchTask?.cancel()
+
+        deferredRuntimePatchTask = Task { [weak self] in
+            do {
+                try await AsyncTiming.sleep(seconds: debounceInterval)
+            } catch {
+                return
+            }
+
+            await self?.flushDeferredRuntimePatch()
+        }
+    }
+
+    @discardableResult
+    public func flushDeferredRuntimePatch() async -> Bool {
+        deferredRuntimePatchTask?.cancel()
+        deferredRuntimePatchTask = nil
+        guard let patch = deferredRuntimePatch else {
+            return false
+        }
+        deferredRuntimePatch = nil
+
+        do {
+            try applyRuntimePatch(patch)
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_runtime_patch_applied_deferred",
+                message: "Applied deferred session runtime patch."
+            )
+            return true
+        } catch {
+            emitAlert(
+                .nativeEvent,
+                nativeEventName: "session_runtime_patch_apply_deferred_failed",
+                message: "Deferred session runtime patch apply failed: \(error.localizedDescription)"
+            )
+            return false
+        }
+    }
+
     public func scheduleConfigurationApply(
         _ configuration: SessionConfiguration,
         debounceInterval: TimeInterval = 0.2
@@ -256,6 +471,7 @@ public actor TorrentSession {
 
     @discardableResult
     public func flushDeferredConfigurationApply() async -> Bool {
+        deferredApplyTask?.cancel()
         deferredApplyTask = nil
         guard let pending = deferredConfiguration else {
             return false
@@ -295,17 +511,26 @@ public actor TorrentSession {
     }
 
     public func setTransportBehavior(_ behavior: SessionTransportBehavior) throws {
-        try applyConfiguration(configuration.applyingTransportBehavior(behavior))
+        if LibtorrentApple.backendSupportsSessionRuntimeSettings {
+            try applyRuntimePatch(.transportBehavior(behavior))
+        } else {
+            try applyConfiguration(configuration.applyingTransportBehavior(behavior))
+        }
     }
 
     public func scheduleTransportBehaviorApply(
         _ behavior: SessionTransportBehavior,
         debounceInterval: TimeInterval = 0.2
     ) {
-        scheduleConfigurationApply(
-            configuration.applyingTransportBehavior(behavior),
-            debounceInterval: debounceInterval
-        )
+        if LibtorrentApple.backendSupportsSessionRuntimeSettings {
+            scheduleRuntimePatch(.transportBehavior(behavior), debounceInterval: debounceInterval)
+        } else {
+            let baseConfiguration = deferredConfiguration ?? configuration
+            scheduleConfigurationApply(
+                baseConfiguration.applyingTransportBehavior(behavior),
+                debounceInterval: debounceInterval
+            )
+        }
     }
 
     public func startThroughputOptimizer(
@@ -368,6 +593,12 @@ public actor TorrentSession {
         deferredApplyTask?.cancel()
         deferredApplyTask = nil
         deferredConfiguration = nil
+        deferredRuntimePatchTask?.cancel()
+        deferredRuntimePatchTask = nil
+        deferredRuntimePatch = nil
+        scheduledRateLimitsTask?.cancel()
+        scheduledRateLimitsTask = nil
+        scheduledRateLimitsPatch = nil
         stopNativeAlertPolling()
         BridgeRuntime.destroySession(nativeSession)
         nativeSession = nil
@@ -1496,21 +1727,38 @@ public actor TorrentSession {
     }
 
     private func persistentConfigurationSnapshot() -> SessionConfiguration {
+        var snapshot: SessionConfiguration
         if let deferredConfiguration {
-            return deferredConfiguration
-        }
-
-        if throughputOptimizerPolicy != nil,
-           let throughputOptimizerBaseConfiguration
+            snapshot = deferredConfiguration
+        } else if throughputOptimizerPolicy != nil,
+                  let throughputOptimizerBaseConfiguration
         {
-            return throughputOptimizerBaseConfiguration
+            snapshot = throughputOptimizerBaseConfiguration
+        } else {
+            snapshot = configuration
         }
 
-        return configuration
+        if let deferredRuntimePatch {
+            snapshot.applyRuntimePatch(deferredRuntimePatch)
+        }
+        if let scheduledRateLimitsPatch {
+            snapshot.applyRuntimePatch(scheduledRateLimitsPatch)
+        }
+
+        return snapshot
     }
 
     private func bumpPersistentStateRevision() {
         persistentStateRevision &+= 1
+    }
+
+    private func rebaseDeferredConfiguration(on patch: SessionRuntimePatch) {
+        guard var deferredConfiguration else {
+            return
+        }
+
+        deferredConfiguration.applyRuntimePatch(patch)
+        self.deferredConfiguration = deferredConfiguration
     }
 
     private func makeTrackedTorrentDictionary(
