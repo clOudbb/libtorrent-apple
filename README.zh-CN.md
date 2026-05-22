@@ -1,5 +1,18 @@
 # libtorrent-apple
 
+<p align="center">
+  <img src="Resources/LibtorrentAppleLogo.png" alt="libtorrent-apple" width="560">
+</p>
+
+<p align="center">
+  <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0-orange?style=flat-square" alt="Swift 6.0"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.10-orange?style=flat-square" alt="SwiftPM 0.2.10"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.12-informational?style=flat-square" alt="libtorrent v2.0.12"></a>
+  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.0001-lightgrey?style=flat-square" alt="OpenSSL 3.6.0001"></a>
+</p>
+
 [English](README.md)
 
 `libtorrent-apple` 是一个基于 `libtorrent` 的 Apple 平台 Swift SDK。
@@ -118,31 +131,21 @@ Task {
 }
 ```
 
-### 5. 应用吞吐策略与 peer 过滤
+### 5. 可选运行时调优与 peer 过滤
 
 ```swift
 var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
 configuration.shareRatioLimit = 200
-configuration.applyProfile(.qBittorrentParityV1)
 
-let parityDownloader = TorrentDownloader(configuration: configuration)
-try await parityDownloader.start()
-try await parityDownloader.applyProfile(.qBittorrentParityV1)
-try await parityDownloader.setPeerFilters(
+let runtimeDownloader = TorrentDownloader(configuration: configuration)
+try await runtimeDownloader.start()
+try await runtimeDownloader.setPeerFilters(
     blockedCIDRs: ["10.0.0.0/8"],
     allowedCIDRs: []
 )
 ```
 
-可选策略：
-
-- `.baseline`：保持默认行为
-- `.animekoParityV1`：旧版 animeko 对齐策略
-- `.animekoParityV2`：优化版 animeko/anitorrent 吞吐策略，包含 anime tracker preset、更快 peer churn、更大请求队列和更高 I/O buffer
-- `.qBittorrentParityV1`：qB 风格吞吐策略，显式对齐 request queue、AIO、file pool、send buffer、tracker announce 和偏 TCP 的混合传输默认值
-- `.transmissionParityV1`：Transmission 风格均衡策略，降低全局 peer 压力，保留下载队列、request queue 对齐和 uTP/TCP 公平性
-
-这些策略只是基于公开 `SessionConfiguration` API 的便捷 preset。下游可以先应用参考策略再覆盖任意已暴露字段，也可以完全跳过 preset 直接构建自定义配置。`SessionProfile.throughputReferenceProfiles` 可用于枚举三套正式吞吐参考策略。建议尽量在 session 启动前应用 profile；高频运行时控制应使用下面的窄粒度 setter。
+多数 App 直接配置 `SessionConfiguration` 并保留默认值即可。`applyProfile` 只是基于同一套公开配置 API 的便捷入口；使用后仍可覆盖任意已暴露字段。高频运行时控制应使用下面的窄粒度 setter。
 
 ### 6. 运行时 Speed 与 BitTorrent 设置
 
@@ -154,33 +157,93 @@ guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
     return
 }
 
-// 类似 qBittorrent / Transmission 的立即限速更新。
-try await downloader.setRateLimits(
+// 立即限速更新。
+try await runtimeDownloader.setRateLimits(
     uploadBytesPerSecond: 256 * 1024,
     downloadBytesPerSecond: 4 * 1024 * 1024
 )
 
 // 给 UI slider 使用的 throttle/coalesce 更新：第一笔尽快生效，短窗口内只保留最后一笔。
-await downloader.scheduleRateLimits(
+await runtimeDownloader.scheduleRateLimits(
     uploadBytesPerSecond: 512 * 1024,
     downloadBytesPerSecond: 8 * 1024 * 1024,
     throttleInterval: 0.2
 )
 
 // 可运行时调整的 BitTorrent 设置，不会重放完整配置。
-try await downloader.setConnectionLimits(
+try await runtimeDownloader.setConnectionLimits(
     globalConnections: 500,
     connectionSpeed: 40,
     torrentConnectBoost: 80
 )
-try await downloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
-try await downloader.setRateLimitOptions(includeIPOverhead: true)
-try await downloader.setTransportBehavior(.tcpOnly)
+try await runtimeDownloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
+try await runtimeDownloader.setRateLimitOptions(includeIPOverhead: true)
 ```
 
 这些 API 中 `nil` 表示“不改”，`0` 保持 libtorrent 的不限速语义。`applyConfiguration` 仍用于初始化、持久化恢复和低频完整配置；运行时 speed、queue、connection、transport 控制应优先使用窄 API，避免夹带 DHT、UPnP、监听端口等无关设置。
 
-### 7. 文件优先级、tracker 和 torrent 控制
+### 7. 延迟应用与恢复 Reannounce Hooks
+
+```swift
+let session = await runtimeDownloader.session()
+var tuned = await session.configuration
+tuned.connectionSpeed = 45
+tuned.peerTurnover = 4
+tuned.announceToAllTiers = true
+
+await session.scheduleConfigurationApply(
+    tuned,
+    debounceInterval: 0.2
+)
+
+// 下游 App 可以在网络路径变化或系统唤醒回调中触发。
+_ = try await session.handleNetworkPathChanged()
+_ = try await session.handleSystemWakeupDetected()
+```
+
+`handleNetworkPathChanged()` 和 `handleSystemWakeupDetected()` 会在 native bridge 支持时先重开 libtorrent network sockets，再批量 reannounce。iOS 下游 App 应从 `NWPathMonitor` 更新和系统唤醒回调中主动调用它们。当前默认 `SessionConfiguration.listenInterfaces` 已改为显式双栈绑定：`0.0.0.0:0,[::]:0`。
+
+### 8. 运行时传输行为控制（uTP/TCP）
+
+```swift
+// 立即生效
+try await runtimeDownloader.setTransportBehavior(.tcpOnly)
+
+// debounce 后生效，适合高频开关
+await runtimeDownloader.scheduleTransportBehaviorApply(.preferTCP, debounceInterval: 0.2)
+_ = await runtimeDownloader.flushDeferredRuntimePatch()
+```
+
+行为映射：
+
+- `.balanced`：启用 TCP + uTP，`mixedModeAlgorithm = .peerProportional`
+- `.preferTCP`：启用 TCP + uTP，`mixedModeAlgorithm = .preferTCP`
+- `.tcpOnly`：启用 TCP，禁用 uTP
+- `.utpOnly`：禁用 TCP，启用 uTP
+
+### 9. Throughput Optimizer（P0-1/P0-2）
+
+```swift
+await runtimeDownloader.startThroughputOptimizer(
+    policy: .default
+)
+
+// 可选：检查状态
+let enabled = await runtimeDownloader.isThroughputOptimizerEnabled()
+print("optimizer enabled:", enabled)
+
+// 停止并恢复 baseline 配置
+await runtimeDownloader.stopThroughputOptimizer(restoreBaseline: true)
+```
+
+它会处理：
+
+- 低速/零速窗口检测
+- 对停滞下载做批量 reannounce
+- 临时吞吐 boost（`connectionSpeed`、`torrentConnectBoost`、request queue、peer turnover）
+- 在稳定恢复窗口后自动还原 baseline
+
+### 10. 文件优先级、tracker 和 torrent 控制
 
 ```swift
 _ = try await handle.setFilePriority(.high, at: 0)
@@ -199,7 +262,7 @@ let pieces = try await handle.pieces()
 print(trackers.count, peers.count, pieces.count)
 ```
 
-### 8. 保存和恢复
+### 11. 保存和恢复
 
 适用于 iOS / macOS 重启后的持久化恢复：
 
@@ -211,7 +274,7 @@ let report = try await downloader.restorePersistentState()
 print(report.restoredCount, report.degradedCount, report.failedCount)
 ```
 
-这条路径更接近 qB / Transmission 的恢复策略：
+这条路径用于持久化重启恢复：
 
 - SDK 会保存 session manifest 和每个 torrent 的恢复产物
 - 恢复时优先使用 native resume data，缺失时回退到持久化的 `.torrent` 元数据，再回退到仍然可用的原始 source
@@ -230,13 +293,6 @@ let restoredHandle = try await downloader.addTorrent(
 print(try await restoredHandle.status().name)
 ```
 
-```swift
-_ = try await downloader.handleNetworkPathChanged()
-_ = try await downloader.handleSystemWakeupDetected()
-```
-
-`handleNetworkPathChanged()` 和 `handleSystemWakeupDetected()` 会在 native bridge 支持时先重开 libtorrent network sockets，再批量 reannounce。iOS 下游 App 应从 `NWPathMonitor` 更新和系统唤醒回调中主动调用它们。当前默认 `SessionConfiguration.listenInterfaces` 已改为显式双栈绑定：`0.0.0.0:0,[::]:0`。
-
 ## 这版 API 已经覆盖的能力
 
 当前版本已经包含：
@@ -252,7 +308,9 @@ _ = try await downloader.handleSystemWakeupDetected()
 - native resume data 导出和导入
 - downloader 级 stats stream 和 piece update stream
 - 代理、加密、队列、缓存、send buffer 等 session 配置
-- qB 风格 swarm 计数能力（`peerCount/seedCount` + `peerTotalCount/seedTotalCount`）
+- swarm 计数能力（`peerCount/seedCount` + `peerTotalCount/seedTotalCount`）
+- session 配置延迟应用和批量 reannounce 恢复 hooks
+- 稀疏运行时补丁：限速、连接数、队列、rate-limit option 和 uTP/TCP 传输控制
 
 ## HTTPS Tracker 与 TLS Backend
 
@@ -339,7 +397,6 @@ cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # 编辑 /tmp/benchmark-sources.txt，替换成你的磁力链接/.torrent 输入
 
 ./scripts/run-benchmark-demo.sh local-binary \
-  --profile animeko-parity-v2 \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
   --interval 1

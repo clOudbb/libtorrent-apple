@@ -1,5 +1,18 @@
 # libtorrent-apple
 
+<p align="center">
+  <img src="Resources/LibtorrentAppleLogo.png" alt="libtorrent-apple" width="560">
+</p>
+
+<p align="center">
+  <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0-orange?style=flat-square" alt="Swift 6.0"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.10-orange?style=flat-square" alt="SwiftPM 0.2.10"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.12-informational?style=flat-square" alt="libtorrent v2.0.12"></a>
+  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.0001-lightgrey?style=flat-square" alt="OpenSSL 3.6.0001"></a>
+</p>
+
 [中文说明](README.zh-CN.md)
 
 `libtorrent-apple` is a SwiftPM-friendly Apple SDK built on top of `libtorrent`.
@@ -118,31 +131,21 @@ Task {
 }
 ```
 
-### 5. Apply Throughput Profiles and Peer Filters
+### 5. Optional Runtime Tuning and Peer Filters
 
 ```swift
 var configuration = SessionConfiguration(downloadDirectory: downloader.defaultSaveDirectory())
 configuration.shareRatioLimit = 200
-configuration.applyProfile(.animekoParityV2)
 
-let parityDownloader = TorrentDownloader(configuration: configuration)
-try await parityDownloader.start()
-try await parityDownloader.applyProfile(.qBittorrentParityV1)
-try await parityDownloader.setPeerFilters(
+let runtimeDownloader = TorrentDownloader(configuration: configuration)
+try await runtimeDownloader.start()
+try await runtimeDownloader.setPeerFilters(
     blockedCIDRs: ["10.0.0.0/8"],
     allowedCIDRs: []
 )
 ```
 
-Available profiles:
-
-- `.baseline`: keep default behavior
-- `.animekoParityV1`: legacy animeko parity profile
-- `.animekoParityV2`: upgraded animeko/anitorrent throughput profile with anime tracker preset, faster peer churn, larger request queues, and higher I/O buffers
-- `.qBittorrentParityV1`: qBittorrent-style throughput profile, including qB/libtorrent request queue, AIO, file-pool, send-buffer, tracker announce, and TCP preference defaults
-- `.transmissionParityV1`: Transmission-style balanced profile with lower global peer pressure, queue limits, request queue parity, and uTP/TCP fairness
-
-Profiles are convenience presets over the public `SessionConfiguration` API. Downstream apps can apply a reference profile, override any exposed field, or build a fully custom configuration directly. Use `SessionProfile.throughputReferenceProfiles` to enumerate the three formal throughput references. Apply profiles before starting a session whenever possible; high-frequency runtime controls should use the narrow setters below.
+For most apps, configure `SessionConfiguration` directly and keep the defaults unless you need specific tuning. `applyProfile` is only a convenience shortcut over the same public configuration API; after using it, you can still override any exposed field. High-frequency runtime controls should use the narrow setters below.
 
 ### 6. Runtime Speed and BitTorrent Settings
 
@@ -154,27 +157,27 @@ guard LibtorrentApple.backendSupportsSessionRuntimeSettings else {
     return
 }
 
-// Immediate qBittorrent/Transmission-style speed update.
-try await parityDownloader.setRateLimits(
+// Immediate speed update.
+try await runtimeDownloader.setRateLimits(
     uploadBytesPerSecond: 256 * 1024,
     downloadBytesPerSecond: 4 * 1024 * 1024
 )
 
 // Throttled/coalesced speed updates for high-frequency UI sliders.
-await parityDownloader.scheduleRateLimits(
+await runtimeDownloader.scheduleRateLimits(
     uploadBytesPerSecond: 512 * 1024,
     downloadBytesPerSecond: 8 * 1024 * 1024,
     throttleInterval: 0.2
 )
 
 // BitTorrent settings that can be changed at runtime without replaying the full config.
-try await parityDownloader.setConnectionLimits(
+try await runtimeDownloader.setConnectionLimits(
     globalConnections: 500,
     connectionSpeed: 40,
     torrentConnectBoost: 80
 )
-try await parityDownloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
-try await parityDownloader.setRateLimitOptions(includeIPOverhead: true)
+try await runtimeDownloader.setActiveLimits(downloads: -1, seeds: -1, torrents: -1)
+try await runtimeDownloader.setRateLimitOptions(includeIPOverhead: true)
 ```
 
 `nil` means "leave unchanged"; `0` keeps libtorrent's unlimited rate-limit semantics. Full `applyConfiguration` remains available for low-frequency configuration and persistence, but runtime speed and queue controls should use these narrow APIs to avoid changing unrelated network settings.
@@ -182,7 +185,7 @@ try await parityDownloader.setRateLimitOptions(includeIPOverhead: true)
 ### 7. Deferred Apply and Recovery Reannounce Hooks
 
 ```swift
-let session = await parityDownloader.session()
+let session = await runtimeDownloader.session()
 var tuned = await session.configuration
 tuned.connectionSpeed = 45
 tuned.peerTurnover = 4
@@ -204,11 +207,11 @@ _ = try await session.handleSystemWakeupDetected()
 
 ```swift
 // Immediate apply
-try await parityDownloader.setTransportBehavior(.tcpOnly)
+try await runtimeDownloader.setTransportBehavior(.tcpOnly)
 
 // Debounced apply (for high-frequency toggles)
-await parityDownloader.scheduleTransportBehaviorApply(.preferTCP, debounceInterval: 0.2)
-_ = await parityDownloader.flushDeferredRuntimePatch()
+await runtimeDownloader.scheduleTransportBehaviorApply(.preferTCP, debounceInterval: 0.2)
+_ = await runtimeDownloader.flushDeferredRuntimePatch()
 ```
 
 Behavior mapping:
@@ -221,16 +224,16 @@ Behavior mapping:
 ### 9. Throughput Optimizer (P0-1/P0-2)
 
 ```swift
-await parityDownloader.startThroughputOptimizer(
+await runtimeDownloader.startThroughputOptimizer(
     policy: .default
 )
 
 // Optional: check status
-let enabled = await parityDownloader.isThroughputOptimizerEnabled()
+let enabled = await runtimeDownloader.isThroughputOptimizerEnabled()
 print("optimizer enabled:", enabled)
 
 // Stop and restore baseline configuration
-await parityDownloader.stopThroughputOptimizer(restoreBaseline: true)
+await runtimeDownloader.stopThroughputOptimizer(restoreBaseline: true)
 ```
 
 What it does:
@@ -271,7 +274,7 @@ let report = try await downloader.restorePersistentState()
 print(report.restoredCount, report.degradedCount, report.failedCount)
 ```
 
-Use this path when you want qB or Transmission style restart recovery:
+Use this path for durable restart recovery:
 
 - the SDK persists a session manifest plus per-torrent resume artifacts
 - restore prefers native resume data, then falls back to persisted `.torrent` metadata, then to the original source when still available
@@ -305,7 +308,7 @@ This version already includes:
 - native resume data export and import
 - downloader-level stats streams and piece update streams
 - proxy, encryption, queue, cache, and send-buffer session settings
-- qB-style swarm counters via torrent metrics (`peerCount/seedCount` + `peerTotalCount/seedTotalCount`)
+- swarm counters via torrent metrics (`peerCount/seedCount` + `peerTotalCount/seedTotalCount`)
 - deferred session configuration apply and batch reannounce recovery hooks
 - sparse runtime speed, connection, queue, rate-limit option, and uTP/TCP transport hooks
 
@@ -394,7 +397,6 @@ cp PackageSupport/BENCHMARK_SOURCES_TEMPLATE.txt /tmp/benchmark-sources.txt
 # edit /tmp/benchmark-sources.txt and replace with your magnet/.torrent sources
 
 ./scripts/run-benchmark-demo.sh local-binary \
-  --profile animeko-parity-v2 \
   --sources-file /tmp/benchmark-sources.txt \
   --duration 300 \
   --interval 1
@@ -411,41 +413,6 @@ The demo writes:
 
 - Manual release: run `./scripts/release.sh <version>`, commit `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, create/push the tag, then upload the generated zip manually or publish with `./scripts/publish-github-release.sh <version>`.
 - GitHub automation: the `Release` workflow runs the same prepare flow, commits `Package.swift`, `Sources/LibtorrentAppleBridgeCompat`, and `PackageSupport/BinaryArtifact.env`, creates/pushes the tag, publishes the GitHub Release, and finishes with remote-binary validation. If you provide a baseline version, it also runs the tag-switch validation gate.
-
-Run a fair A/B parity gate with enforced same sources, same trackers, and same time window:
-
-```bash
-./scripts/benchmark-parity-gate.sh \
-  --mode local-binary \
-  --reference-profile animeko-parity-v2 \
-  --candidate-profile qbittorrent-parity-v1 \
-  --threshold-percent 15 \
-  --duration 300 \
-  --interval 1 \
-  -- \
-  --sources-file /tmp/benchmark-sources.txt \
-  --tracker-file /tmp/benchmark-trackers.txt
-```
-
-Gate outputs:
-
-- `reference-*/summary.json`
-- `candidate-*/summary.json`
-- `gate_report.json` (pass/fail + throughput gap + attribution hints)
-
-Run a simplified one-shot same-condition comparison (reference only, no gate threshold):
-
-```bash
-./scripts/benchmark-once-compare.sh \
-  --mode local-binary \
-  --reference-profile animeko-parity-v2 \
-  --candidate-profile qbittorrent-parity-v1 \
-  --duration 120 \
-  --interval 1 \
-  -- \
-  --sources-file /tmp/benchmark-sources.txt \
-  --tracker-file /tmp/benchmark-trackers.txt
-```
 
 ## Build Against Different Upstream Versions
 
