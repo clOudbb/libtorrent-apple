@@ -1,7 +1,5 @@
-# libtorrent-apple
-
 <p align="center">
-  <img src="Resources/LibtorrentAppleLogo.png" alt="libtorrent-apple" width="560">
+  <img src="Resources/LibtorrentAppleBanner.png" alt="libtorrent-apple" width="560">
 </p>
 
 <p align="center">
@@ -10,7 +8,7 @@
   <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.10-orange?style=flat-square" alt="SwiftPM 0.2.10"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.12-informational?style=flat-square" alt="libtorrent v2.0.12"></a>
-  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.0001-lightgrey?style=flat-square" alt="OpenSSL 3.6.0001"></a>
+  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
 </p>
 
 [English](README.md)
@@ -429,7 +427,7 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 
 ```bash
 LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.11-alpha.1
-OPENSSL_REF=3.6.0001 ./scripts/release.sh 0.2.11-alpha.1
+OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.2.11-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：
