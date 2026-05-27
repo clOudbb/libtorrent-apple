@@ -2536,10 +2536,18 @@ bool libtorrent_apple_torrent_force_reannounce(
     }
 
     try {
+        lt::torrent_handle::reannounce_flags_t flags{};
+        if (ignore_min_interval) {
+            flags |= lt::torrent_handle::ignore_min_interval;
+            if (seconds == 0) {
+                flags |= lt::torrent_handle::high_priority;
+            }
+        }
+
         handle.force_reannounce(
             seconds,
             tracker_index,
-            ignore_min_interval ? lt::torrent_handle::ignore_min_interval : lt::torrent_handle::reannounce_flags_t{}
+            flags
         );
         return true;
     } catch (std::exception const &exception) {

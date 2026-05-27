@@ -179,6 +179,11 @@ struct TorrentSessionTests {
         let session = TorrentSession(configuration: SessionConfiguration(downloadDirectory: rootDirectory))
         try await session.start()
 
+        guard try await waitForListeningSession(session, timeoutSeconds: 3) else {
+            await session.stop()
+            return
+        }
+
         let trackerURL = "https://127.0.0.1:1/announce"
         let encodedTrackerURL = try #require(
             trackerURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
@@ -1622,6 +1627,24 @@ struct TorrentSessionTests {
         }
 
         throw TrackerWaitError.timedOut
+    }
+
+    private func waitForListeningSession(
+        _ session: TorrentSession,
+        timeoutSeconds: TimeInterval
+    ) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+        while Date() < deadline {
+            let diagnostics = try await session.sessionDiagnostics()
+            if diagnostics.isListening == true {
+                return true
+            }
+
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        return try await session.sessionDiagnostics().isListening == true
     }
 
     private func waitForDownloadDirectory(
