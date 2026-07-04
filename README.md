@@ -315,7 +315,7 @@ This version already includes:
 - `libtorrent-apple` supports only the `OpenSSL` HTTPS tracker backend.
 - Check `LibtorrentApple.backendInfo.supportsHTTPSTrackers` to confirm capability at runtime.
 - Regression tests cover the `unsupported_url_protocol` failure mode for `https://.../announce` tracker URLs.
-- Release builds sync and pin `OpenSSL-Universal` from `https://github.com/krzyzanowskim/OpenSSL.git` by default.
+- Release builds sync and pin `OpenSSL-Universal` from `https://github.com/krzyzanowskim/OpenSSL.git` by default, currently `3.6.2000`.
 - Local release builds still support explicit `OPENSSL_*` paths and fall back to a local `OpenSSL-Universal` checkout or SwiftPM cache when needed.
 
 ## Build and Validate Locally
@@ -330,6 +330,8 @@ Current public package metadata:
 - Latest published package version: `0.2.12`
 - Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.12/LibtorrentAppleBinary-0.2.12.zip`
 - Current binary module identity: `LibtorrentAppleBinary_0_2_12`
+- Current libtorrent upstream: `v2.0.13`
+- Current OpenSSL upstream: `3.6.2000`
 
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
 - The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_12`.

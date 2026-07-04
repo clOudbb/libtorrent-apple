@@ -315,7 +315,7 @@ print(try await restoredHandle.status().name)
 - `libtorrent-apple` 现在只支持 `OpenSSL` 这一条 HTTPS tracker backend。
 - 运行时可通过 `LibtorrentApple.backendInfo.supportsHTTPSTrackers` 确认能力位。
 - 回归测试已覆盖 `https://.../announce` tracker URL 不再落入 `unsupported_url_protocol`。
-- release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物。
+- release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物，当前为 `3.6.2000`。
 - 本地 release 构建仍支持显式传入 `OPENSSL_*` 路径；若未显式传入，也会继续尝试本地 `OpenSSL-Universal` checkout 或 SwiftPM cache。
 
 ## 本地构建与验证
@@ -330,6 +330,8 @@ print(try await restoredHandle.status().name)
 - 最新公开包版本：`0.2.12`
 - 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.12/LibtorrentAppleBinary-0.2.12.zip`
 - 当前 binary module 身份：`LibtorrentAppleBinary_0_2_12`
+- 当前 libtorrent upstream：`v2.0.13`
+- 当前 OpenSSL upstream：`3.6.2000`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
 - 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_12`。
