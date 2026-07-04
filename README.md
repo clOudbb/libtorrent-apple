@@ -5,9 +5,9 @@
 <p align="center">
   <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0-orange?style=flat-square" alt="Swift 6.0"></a>
   <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
-  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.10-orange?style=flat-square" alt="SwiftPM 0.2.10"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.12-orange?style=flat-square" alt="SwiftPM 0.2.12"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
-  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.12-informational?style=flat-square" alt="libtorrent v2.0.12"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.13-informational?style=flat-square" alt="libtorrent v2.0.13"></a>
   <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
 </p>
 
@@ -19,7 +19,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 ## What This Repo Gives You
 
 - A public SwiftPM product: `LibtorrentApple`
-- A stable bridge target over a versioned internal binary target, currently `LibtorrentAppleBinary_0_2_10`
+- A stable bridge target over a versioned internal binary target, currently `LibtorrentAppleBinary_0_2_12`
 - Apple builds for `iOS device`, `iOS simulator`, and `macOS`
 - A release pipeline that produces a GitHub Release-hosted `XCFramework` zip for SwiftPM
 - A Swift API that already covers the core BitTorrent engine workflows used by projects like `iTorrent` and `anitorrent`
@@ -29,7 +29,7 @@ It packages a real multi-platform `XCFramework`, exposes a Swift-first API, and 
 Add the package:
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.10")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.12")
 ```
 
 Then import:
@@ -327,12 +327,12 @@ The public SwiftPM package is `remote-binary-only`.
 Current public package metadata:
 
 - Repository: `https://github.com/clOudbb/libtorrent-apple.git`
-- Latest published package version: `0.2.10`
-- Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.10/LibtorrentAppleBinary-0.2.10.zip`
-- Current binary module identity: `LibtorrentAppleBinary_0_2_10`
+- Latest published package version: `0.2.12`
+- Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.12/LibtorrentAppleBinary-0.2.12.zip`
+- Current binary module identity: `LibtorrentAppleBinary_0_2_12`
 
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
-- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_10`.
+- The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_2_12`.
 - `PackageSupport/BinaryArtifact.env` is retained only as internal maintainer metadata; downstream SwiftPM consumers do not read it.
 
 Maintainer-only validation paths:
@@ -363,16 +363,16 @@ Validate tag switching in one shared cache directory:
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.9 \
-  --version-b 0.2.10
+  --version-a 0.2.11 \
+  --version-b 0.2.12
 ```
 
 Run a full local self-verification using the current working tree plus a synthetic next release:
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.10 \
-  --version-b 0.2.11-alpha.1
+  --version-a 0.2.12 \
+  --version-b 0.2.13-alpha.1
 ```
 
 Local self-verification rewrites the temporary validation tags to use `binaryTarget(path:)`.
@@ -385,7 +385,7 @@ Build the Apple frameworks:
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.10
+./scripts/make-xcframework.sh 0.2.12
 ```
 
 Run the local benchmark demo:
@@ -427,14 +427,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.0.12 ./scripts/release.sh 0.2.11-alpha.1
-OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.2.11-alpha.1
+LIBTORRENT_REF=v2.0.13 ./scripts/release.sh 0.2.13-alpha.1
+OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.2.13-alpha.1
 ```
 
 Override both dependencies in one release build:
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.11-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.13-alpha.1
 ```
 
 ## Release Model

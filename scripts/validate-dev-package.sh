@@ -6,11 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODE="${1:-source}"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/libtorrent-apple-swift-clang-cache}"
-SWIFT_SANDBOX_FLAGS=()
 
-if [[ "${SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
-    SWIFT_SANDBOX_FLAGS+=(--disable-sandbox)
-fi
+run_swiftpm() {
+    local command="$1"
+    shift
+
+    if [[ "${SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
+        swift "${command}" --disable-sandbox "$@"
+    else
+        swift "${command}" "$@"
+    fi
+}
 
 run_mode() {
     local mode="$1"
@@ -20,8 +26,8 @@ run_mode() {
     export CLANG_MODULE_CACHE_PATH
     export LIBTORRENT_APPLE_PACKAGE_MODE="${mode}"
 
-    swift build "${SWIFT_SANDBOX_FLAGS[@]}" --package-path "${package_dir}"
-    swift test "${SWIFT_SANDBOX_FLAGS[@]}" --package-path "${package_dir}" --disable-xctest
+    run_swiftpm build --package-path "${package_dir}"
+    run_swiftpm test --package-path "${package_dir}" --disable-xctest
     echo "Swift dev package validation passed in ${mode} mode."
 }
 
