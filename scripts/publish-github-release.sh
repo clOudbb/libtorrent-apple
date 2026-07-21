@@ -73,6 +73,88 @@ set -a
 source "${METADATA_PATH}"
 set +a
 
+PROVENANCE_NOTES_PATH="${ROOT_DIR}/Artifacts/release/${ARTIFACT_BASENAME}.release-notes.md"
+GENERATED_NOTES_PATH="${ROOT_DIR}/Artifacts/release/${ARTIFACT_BASENAME}.github-generated-notes.md"
+FINAL_RELEASE_NOTES_PATH="${ROOT_DIR}/Artifacts/release/${ARTIFACT_BASENAME}.release-notes.final.md"
+
+if [[ -z "${REPOSITORY_SLUG:-}" || "${REPOSITORY_SLUG}" == "unknown" ]]; then
+    echo "error: artifact metadata does not contain a GitHub repository slug." >&2
+    exit 1
+fi
+
+if [[ ! -f "${PROVENANCE_NOTES_PATH}" ]]; then
+    echo "error: release provenance not found at ${PROVENANCE_NOTES_PATH}" >&2
+    exit 1
+fi
+
+resolve_previous_published_release_tag() {
+    local release_tags tag
+    release_tags="$(
+        gh release list \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --limit 100 \
+            --json tagName \
+            --jq '.[].tagName'
+    )"
+
+    while IFS= read -r tag; do
+        [[ -z "${tag}" ]] && continue
+        [[ "${tag}" == "${RELEASE_TAG}" ]] && continue
+        printf '%s\n' "${tag}"
+        return
+    done <<< "${release_tags}"
+}
+
+generate_release_notes() {
+    local previous_tag target_commitish
+    local -a generate_notes_args
+
+    previous_tag="$(resolve_previous_published_release_tag)"
+    target_commitish="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+    generate_notes_args=(
+        -X POST
+        "repos/${REPOSITORY_SLUG}/releases/generate-notes"
+        -f "tag_name=${RELEASE_TAG}"
+        -f "target_commitish=${target_commitish}"
+    )
+
+    if [[ -n "${previous_tag}" ]]; then
+        generate_notes_args+=(-f "previous_tag_name=${previous_tag}")
+    fi
+
+    gh api "${generate_notes_args[@]}" --jq '.body' > "${GENERATED_NOTES_PATH}"
+
+    if [[ ! -s "${GENERATED_NOTES_PATH}" ]]; then
+        echo "error: GitHub generated empty release notes for ${RELEASE_TAG}." >&2
+        exit 1
+    fi
+
+    awk -v provenance_path="${PROVENANCE_NOTES_PATH}" '
+        function print_provenance(    line) {
+            while ((getline line < provenance_path) > 0) {
+                print line
+            }
+            close(provenance_path)
+        }
+
+        /^\*\*Full Changelog\*\*:/ && !inserted {
+            print_provenance()
+            print ""
+            inserted = 1
+        }
+
+        { print }
+
+        END {
+            if (!inserted) {
+                print ""
+                print_provenance()
+            }
+        }
+    ' "${GENERATED_NOTES_PATH}" > "${FINAL_RELEASE_NOTES_PATH}"
+}
+
 ensure_release_assets_are_new() {
     local release_tag="$1"
     shift
@@ -89,12 +171,14 @@ ensure_release_assets_are_new() {
     done
 }
 
+generate_release_notes
+
 if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
     ensure_release_assets_are_new \
         "${RELEASE_TAG}" \
         "$(basename "${ZIP_PATH}")"
 
-    gh release edit "${RELEASE_TAG}" --notes-file "${RELEASE_NOTES_PATH}"
+    gh release edit "${RELEASE_TAG}" --notes-file "${FINAL_RELEASE_NOTES_PATH}"
     gh release upload \
         "${RELEASE_TAG}" \
         "${ZIP_PATH}"
@@ -105,17 +189,17 @@ else
             "${ZIP_PATH}" \
             --prerelease \
             --title "${RELEASE_TAG}" \
-            --notes-file "${RELEASE_NOTES_PATH}"
+            --notes-file "${FINAL_RELEASE_NOTES_PATH}"
     else
         gh release create \
             "${RELEASE_TAG}" \
             "${ZIP_PATH}" \
             --title "${RELEASE_TAG}" \
-            --notes-file "${RELEASE_NOTES_PATH}"
+            --notes-file "${FINAL_RELEASE_NOTES_PATH}"
     fi
 fi
 
 echo "Published ${RELEASE_TAG}"
 echo "Artifact: ${ZIP_PATH}"
 echo "Checksum: ${CHECKSUM}"
-echo "Release notes source: ${RELEASE_NOTES_PATH}"
+echo "Release notes source: ${FINAL_RELEASE_NOTES_PATH}"
