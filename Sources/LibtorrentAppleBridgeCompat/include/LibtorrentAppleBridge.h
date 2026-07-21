@@ -1,7 +1,7 @@
 #ifndef LIBTORRENT_APPLE_BRIDGE_COMPAT_H
 #define LIBTORRENT_APPLE_BRIDGE_COMPAT_H
 
-#include <LibtorrentAppleBinary_0_2_12/LibtorrentAppleBinary.h>
+#include <LibtorrentAppleBinary_0_3_0/LibtorrentAppleBinary.h>
 
 #ifndef LIBTORRENT_APPLE_HAS_SESSION_RUNTIME_SETTINGS
 #ifdef __cplusplus

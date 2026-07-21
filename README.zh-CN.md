@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0-orange?style=flat-square" alt="Swift 6.0"></a>
   <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
-  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.12-orange?style=flat-square" alt="SwiftPM 0.2.12"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.3.0-orange?style=flat-square" alt="SwiftPM 0.3.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
   <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.0-informational?style=flat-square" alt="libtorrent v2.1.0"></a>
   <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
@@ -19,7 +19,7 @@
 ## 这个仓库能给你什么
 
 - 一个对外的 SwiftPM 产品：`LibtorrentApple`
-- 一个稳定桥接 target，底层使用版本化内部二进制 target，当前为 `LibtorrentAppleBinary_0_2_12`
+- 一个稳定桥接 target，底层使用版本化内部二进制 target，当前为 `LibtorrentAppleBinary_0_3_0`
 - `iOS 真机`、`iOS 模拟器`、`macOS` 三套产物
 - 一套可以产出 GitHub Release 二进制包的自动化脚本
 - 一套已经覆盖 `iTorrent`、`anitorrent` 这类项目 BT 核心能力的 Swift API
@@ -29,7 +29,7 @@
 添加包依赖：
 
 ```swift
-.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.2.12")
+.package(url: "https://github.com/clOudbb/libtorrent-apple.git", from: "0.3.0")
 ```
 
 导入模块：
@@ -333,14 +333,14 @@ WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT
 当前公开包信息：
 
 - 仓库：`https://github.com/clOudbb/libtorrent-apple.git`
-- 最新公开包版本：`0.2.12`
-- 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.12/LibtorrentAppleBinary-0.2.12.zip`
-- 当前 binary module 身份：`LibtorrentAppleBinary_0_2_12`
+- 最新公开包版本：`0.3.0`
+- 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.0/LibtorrentAppleBinary-0.3.0.zip`
+- 当前 binary module 身份：`LibtorrentAppleBinary_0_3_0`
 - 当前 libtorrent upstream：`v2.1.0`
 - 当前 OpenSSL upstream：`3.6.2000`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
-- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_2_12`。
+- 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_3_0`。
 - `PackageSupport/BinaryArtifact.env` 只保留给维护者脚本使用，不再参与下游 SwiftPM 解析。
 
 仅供维护者使用的验证路径：
@@ -361,7 +361,7 @@ WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT
 ./scripts/sync-openssl.sh
 ./scripts/build-apple-libs.sh
 ./scripts/smoke-test-macos-framework.sh
-./scripts/make-xcframework.sh 0.2.12
+./scripts/make-xcframework.sh 0.3.0
 ```
 
 验证 local-binary dev package：
@@ -381,16 +381,16 @@ WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT
 ```bash
 ./scripts/validate-version-switch.sh \
   --repo-url https://github.com/clOudbb/libtorrent-apple.git \
-  --version-a 0.2.11 \
-  --version-b 0.2.12
+  --version-a 0.2.12 \
+  --version-b 0.3.0
 ```
 
 用当前工作区做一次完整的本地自验：
 
 ```bash
 ./scripts/self-verify-version-switch.sh \
-  --version-a 0.2.12 \
-  --version-b 0.2.13-alpha.1
+  --version-a 0.3.0 \
+  --version-b 0.3.1-alpha.1
 ```
 
 本地自验会把临时验证 tag 改写成 `binaryTarget(path:)`。
@@ -434,14 +434,14 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.1.0 ./scripts/release.sh 0.2.13-alpha.1
-OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.2.13-alpha.1
+LIBTORRENT_REF=v2.1.0 ./scripts/release.sh 0.3.1-alpha.1
+OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.3.1-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：
 
 ```bash
-LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.2.13-alpha.1
+LIBTORRENT_REF=latest OPENSSL_REF=latest ./scripts/release.sh 0.3.1-alpha.1
 ```
 
 ## Release 与 SwiftPM 的关系
