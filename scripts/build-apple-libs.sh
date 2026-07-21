@@ -24,7 +24,7 @@ FRAMEWORK_NAME="${FRAMEWORK_NAME:-${FRAMEWORK_BASENAME:-LibtorrentAppleBinary}}"
 FRAMEWORK_BUNDLE_ID_PREFIX="${FRAMEWORK_BUNDLE_ID_PREFIX:-io.github.cloudbb}"
 IOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET:-15.0}"
 MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
-BOOST_VERSION="${BOOST_VERSION:-1.76.0}"
+BOOST_VERSION="${BOOST_VERSION:-1.91.0}"
 BOOST_SOURCE_URL="${BOOST_SOURCE_URL:-https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION//./_}.tar.bz2}"
 BUILD_JOBS="${BUILD_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || printf '4\n')}"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/libtorrent-apple-clang-cache}"
@@ -459,14 +459,18 @@ build_libtorrent_for_sdk() {
     rm -rf "${build_dir}"
     mkdir -p "${build_dir}"
 
+    # libtorrent 2.1's CMake target maps deprecated-functions to ABI 2, but the
+    # existing bridge still uses ABI 1 compatibility APIs. Override the target
+    # definition here and mirror it in bridge_cflags below.
     local cmake_args=(
         -S "${SOURCE_DIR}"
         -B "${build_dir}"
         -G "Unix Makefiles"
         -DCMAKE_C_COMPILER="${c_compiler}"
         -DCMAKE_CXX_COMPILER="${cxx_compiler}"
+        "-DCMAKE_CXX_FLAGS=-UTORRENT_ABI_VERSION -DTORRENT_ABI_VERSION=1"
         -DCMAKE_BUILD_TYPE="${CONFIGURATION}"
-        -DCMAKE_CXX_STANDARD=14
+        -DCMAKE_CXX_STANDARD=17
         -DCMAKE_OSX_SYSROOT="${sdk}"
         -DCMAKE_OSX_ARCHITECTURES="${archs_string}"
         -DCMAKE_OSX_DEPLOYMENT_TARGET="${deployment_target}"
@@ -475,9 +479,10 @@ build_libtorrent_for_sdk() {
         -Dbuild_examples=OFF
         -Dbuild_tests=OFF
         -Dbuild_tools=OFF
-        -Ddeprecated-functions=ON
+        -Ddeprecated-functions=1
         -Ddht=ON
         -Dencryption=ON
+        -Dwebtorrent=OFF
         -DBOOST_ROOT="${boost_include_dir}"
         -DBOOST_INCLUDEDIR="${boost_include_dir}"
         -DBoost_INCLUDE_DIR="${boost_include_dir}"
@@ -544,7 +549,12 @@ build_bridge_archive_for_sdk() {
             ;;
     esac
 
-    bridge_cflags+=(-DTORRENT_USE_SSL=1 -DTORRENT_USE_OPENSSL=1)
+    bridge_cflags+=(
+        -DTORRENT_ABI_VERSION=1
+        -DTORRENT_USE_RTC=0
+        -DTORRENT_USE_SSL=1
+        -DTORRENT_USE_OPENSSL=1
+    )
     if [[ -n "${CURRENT_OPENSSL_INCLUDE_DIR}" ]]; then
         bridge_cflags+=(-I"${CURRENT_OPENSSL_INCLUDE_DIR}")
     fi
@@ -554,7 +564,7 @@ build_bridge_archive_for_sdk() {
         local archive_path="${bridge_dir}/${FRAMEWORK_NAME}_${arch}.a"
 
         "${cxx_compiler}" \
-            -std=c++14 \
+            -std=c++17 \
             -c "${NATIVE_BRIDGE_DIR}/src/libtorrent_apple_bridge.cpp" \
             -o "${object_path}" \
             -arch "${arch}" \

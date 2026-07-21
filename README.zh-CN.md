@@ -7,7 +7,7 @@
   <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
   <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.2.12-orange?style=flat-square" alt="SwiftPM 0.2.12"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
-  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.0.13-informational?style=flat-square" alt="libtorrent v2.0.13"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.0-informational?style=flat-square" alt="libtorrent v2.1.0"></a>
   <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
 </p>
 
@@ -318,6 +318,12 @@ print(try await restoredHandle.status().name)
 - release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物，当前为 `3.6.2000`。
 - 本地 release 构建仍支持显式传入 `OPENSSL_*` 路径；若未显式传入，也会继续尝试本地 `OpenSSL-Universal` checkout 或 SwiftPM cache。
 
+## libtorrent 2.1 与 WebTorrent
+
+libtorrent 2.1 新增了通过 WebRTC 与浏览器 Peer 通信的 WebTorrent 支持，上游默认开启。`libtorrent-apple` 使用 `-Dwebtorrent=OFF` 构建，因此 Apple 二进制不包含 WebRTC、WebSocket tracker 支持及其相关原生依赖。
+
+WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT、PEX、LSD、磁力链接、`.torrent` 文件以及 HTTP/HTTPS/UDP tracker 均继续可用。
+
 ## 本地构建与验证
 
 ### 公开包与维护者验证路径
@@ -330,7 +336,7 @@ print(try await restoredHandle.status().name)
 - 最新公开包版本：`0.2.12`
 - 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.2.12/LibtorrentAppleBinary-0.2.12.zip`
 - 当前 binary module 身份：`LibtorrentAppleBinary_0_2_12`
-- 当前 libtorrent upstream：`v2.0.13`
+- 当前 libtorrent upstream：`v2.1.0`
 - 当前 OpenSSL upstream：`3.6.2000`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
@@ -428,7 +434,7 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.0.13 ./scripts/release.sh 0.2.13-alpha.1
+LIBTORRENT_REF=v2.1.0 ./scripts/release.sh 0.2.13-alpha.1
 OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.2.13-alpha.1
 ```
 
