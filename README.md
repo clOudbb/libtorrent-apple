@@ -336,8 +336,8 @@ Current public package metadata:
 - Latest published package version: `0.3.0`
 - Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.0/LibtorrentAppleBinary-0.3.0.zip`
 - Current binary module identity: `LibtorrentAppleBinary_0_3_0`
-- Current libtorrent upstream: `v2.1.1`
-- Current OpenSSL upstream: `3.6.3000`
+- Repository build default for libtorrent: `v2.1.1`
+- Repository build default for OpenSSL: `3.6.3000`
 
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
 - The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_3_0`.

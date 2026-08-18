@@ -336,8 +336,8 @@ WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT
 - 最新公开包版本：`0.3.0`
 - 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.0/LibtorrentAppleBinary-0.3.0.zip`
 - 当前 binary module 身份：`LibtorrentAppleBinary_0_3_0`
-- 当前 libtorrent upstream：`v2.1.1`
-- 当前 OpenSSL upstream：`3.6.3000`
+- 仓库构建默认使用的 libtorrent upstream：`v2.1.1`
+- 仓库构建默认使用的 OpenSSL upstream：`3.6.3000`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
 - 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_3_0`。
