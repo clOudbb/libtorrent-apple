@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Updated libtorrent from 2.1.0 to 2.1.1.
+- Updated OpenSSL-Universal from 3.6.2000 (OpenSSL 3.6.2) to 3.6.3000 (OpenSSL 3.6.3).
+
 ## [0.3.0] - 2026-07-22
 
 ### Changed

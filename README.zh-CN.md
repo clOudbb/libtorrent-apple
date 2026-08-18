@@ -7,8 +7,8 @@
   <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
   <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.3.0-orange?style=flat-square" alt="SwiftPM 0.3.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
-  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.0-informational?style=flat-square" alt="libtorrent v2.1.0"></a>
-  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.1-informational?style=flat-square" alt="libtorrent v2.1.1"></a>
+  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.3000-lightgrey?style=flat-square" alt="OpenSSL 3.6.3000"></a>
 </p>
 
 [English](README.md)
@@ -315,7 +315,7 @@ print(try await restoredHandle.status().name)
 - `libtorrent-apple` 现在只支持 `OpenSSL` 这一条 HTTPS tracker backend。
 - 运行时可通过 `LibtorrentApple.backendInfo.supportsHTTPSTrackers` 确认能力位。
 - 回归测试已覆盖 `https://.../announce` tracker URL 不再落入 `unsupported_url_protocol`。
-- release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物，当前为 `3.6.2000`。
+- release 构建默认会同步并固定 `https://github.com/krzyzanowskim/OpenSSL.git` 的 `OpenSSL-Universal` 产物，当前为 `3.6.3000`。
 - 本地 release 构建仍支持显式传入 `OPENSSL_*` 路径；若未显式传入，也会继续尝试本地 `OpenSSL-Universal` checkout 或 SwiftPM cache。
 
 ## libtorrent 2.1 与 WebTorrent
@@ -336,8 +336,8 @@ WebTorrent 已关闭，但标准 BitTorrent 能力不受影响：TCP、uTP、DHT
 - 最新公开包版本：`0.3.0`
 - 当前二进制产物：`https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.0/LibtorrentAppleBinary-0.3.0.zip`
 - 当前 binary module 身份：`LibtorrentAppleBinary_0_3_0`
-- 当前 libtorrent upstream：`v2.1.0`
-- 当前 OpenSSL upstream：`3.6.2000`
+- 当前 libtorrent upstream：`v2.1.1`
+- 当前 OpenSSL upstream：`3.6.3000`
 
 - 每个 release tag 都会提交一份自包含的 `Package.swift`，其中直接写死 binary target 名、URL 和 checksum。
 - 公开包始终通过稳定名字的 `LibtorrentAppleBridge` 内部桥接层访问底层二进制，而每个 release 都拥有独立的版本化 binary module 身份，例如 `LibtorrentAppleBinary_0_3_0`。
@@ -434,8 +434,8 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 如果你想临时指定某个版本：
 
 ```bash
-LIBTORRENT_REF=v2.1.0 ./scripts/release.sh 0.3.1-alpha.1
-OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.3.1-alpha.1
+LIBTORRENT_REF=v2.1.1 ./scripts/release.sh 0.3.1-alpha.1
+OPENSSL_REF=3.6.3000 ./scripts/release.sh 0.3.1-alpha.1
 ```
 
 如果你想在一次 release 构建里同时追两者最新版本：

@@ -7,8 +7,8 @@
   <a href="Package.swift"><img src="https://img.shields.io/badge/Platforms-iOS%2015%2B%20%7C%20macOS%2013%2B-yellowgreen?style=flat-square" alt="Platforms: iOS 15+ and macOS 13+"></a>
   <a href="Package.swift"><img src="https://img.shields.io/badge/SwiftPM-0.3.0-orange?style=flat-square" alt="SwiftPM 0.3.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="MIT License"></a>
-  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.0-informational?style=flat-square" alt="libtorrent v2.1.0"></a>
-  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.2000-lightgrey?style=flat-square" alt="OpenSSL 3.6.2000"></a>
+  <a href="https://github.com/arvidn/libtorrent"><img src="https://img.shields.io/badge/libtorrent-v2.1.1-informational?style=flat-square" alt="libtorrent v2.1.1"></a>
+  <a href="https://github.com/krzyzanowskim/OpenSSL"><img src="https://img.shields.io/badge/OpenSSL-3.6.3000-lightgrey?style=flat-square" alt="OpenSSL 3.6.3000"></a>
 </p>
 
 [中文说明](README.zh-CN.md)
@@ -315,7 +315,7 @@ This version already includes:
 - `libtorrent-apple` supports only the `OpenSSL` HTTPS tracker backend.
 - Check `LibtorrentApple.backendInfo.supportsHTTPSTrackers` to confirm capability at runtime.
 - Regression tests cover the `unsupported_url_protocol` failure mode for `https://.../announce` tracker URLs.
-- Release builds sync and pin `OpenSSL-Universal` from `https://github.com/krzyzanowskim/OpenSSL.git` by default, currently `3.6.2000`.
+- Release builds sync and pin `OpenSSL-Universal` from `https://github.com/krzyzanowskim/OpenSSL.git` by default, currently `3.6.3000`.
 - Local release builds still support explicit `OPENSSL_*` paths and fall back to a local `OpenSSL-Universal` checkout or SwiftPM cache when needed.
 
 ## libtorrent 2.1 and WebTorrent
@@ -336,8 +336,8 @@ Current public package metadata:
 - Latest published package version: `0.3.0`
 - Current binary artifact: `https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.0/LibtorrentAppleBinary-0.3.0.zip`
 - Current binary module identity: `LibtorrentAppleBinary_0_3_0`
-- Current libtorrent upstream: `v2.1.0`
-- Current OpenSSL upstream: `3.6.2000`
+- Current libtorrent upstream: `v2.1.1`
+- Current OpenSSL upstream: `3.6.3000`
 
 - Each release tag commits a self-contained `Package.swift` with a literal binary target name, URL, and checksum.
 - The public package always builds through the stable internal bridge target `LibtorrentAppleBridge`, while each release gets its own versioned binary module identity such as `LibtorrentAppleBinary_0_3_0`.
@@ -435,8 +435,8 @@ OPENSSL_REF=latest ./scripts/sync-openssl.sh
 Use a specific upstream tag for one build:
 
 ```bash
-LIBTORRENT_REF=v2.1.0 ./scripts/release.sh 0.3.1-alpha.1
-OPENSSL_REF=3.6.2000 ./scripts/release.sh 0.3.1-alpha.1
+LIBTORRENT_REF=v2.1.1 ./scripts/release.sh 0.3.1-alpha.1
+OPENSSL_REF=3.6.3000 ./scripts/release.sh 0.3.1-alpha.1
 ```
 
 Override both dependencies in one release build:
