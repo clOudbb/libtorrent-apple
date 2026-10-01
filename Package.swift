@@ -2,9 +2,9 @@
 
 import PackageDescription
 
-let binaryTargetName = "LibtorrentAppleBinary_0_3_1"
-let binaryTargetURL = "https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.1/LibtorrentAppleBinary-0.3.1.zip"
-let binaryTargetChecksum = "d887e4e3b5c58a4a28e68ffe04fe443e084201787e4a1558e278d90ea85ccb08"
+let binaryTargetName = "LibtorrentAppleBinary_0_3_2"
+let binaryTargetURL = "https://github.com/clOudbb/libtorrent-apple/releases/download/v0.3.2/LibtorrentAppleBinary-0.3.2.zip"
+let binaryTargetChecksum = "34891d4a0bac34524dae7f7c0ec83f6a8f10a15e175bd9711dbd27ddba947a5e"
 
 let package = Package(
     name: "libtorrent-apple",
